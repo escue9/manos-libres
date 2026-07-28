@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cierre semanal · Manos Libres</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800;900&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0e10;--surface:#16161a;--surface-2:#1e1e24;--border:#2a2a32;--text:#f2f2f5;--text-dim:#9a9aa8;--text-faint:#6a6a78;--produccion:#e8185a;--pedidos:#f55b1e;--clientes:#f5b800;--equipo:#1ec84a;--caja:#3db8f5;--ok:#1ec84a;--warn:#f5b800;--danger:#e8185a;--r-sm:10px;--r-md:14px;--r-lg:20px;--tap:48px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Nunito',system-ui,sans-serif;font-weight:800;overflow-x:hidden}
+body{max-width:520px;margin:0 auto;padding-bottom:calc(28px + env(safe-area-inset-bottom))}
+a{color:var(--caja)}a:hover{color:var(--clientes)}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+.brand{display:flex;align-items:center;gap:11px}
+.brand .mk{width:40px;height:40px;flex:none;background:url("../../assets/logo-mark.png") center/contain no-repeat}
+header{padding:18px 16px 4px}
+h1{font-family:'Fredoka One',cursive;font-weight:400;font-size:26px;line-height:1;margin:0;letter-spacing:-.3px}
+h1 i{display:block;width:34px;height:4px;border-radius:2px;margin-top:9px;background:linear-gradient(90deg,var(--caja),var(--equipo))}
+.wk{display:flex;align-items:center;gap:8px;padding:16px 14px 4px}
+.nav{width:var(--tap);height:var(--tap);flex:none;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--text-dim);font-size:20px;font-weight:800;cursor:pointer;transition:background .14s,color .14s}
+.nav:active{background:var(--surface-2);color:var(--text)}
+.nav:disabled{opacity:.32;cursor:not-allowed}
+.wkl{flex:1;height:var(--tap);display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm)}
+.wkl b{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:700;font-size:16px;letter-spacing:-.3px}
+.wkl span{font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--text-faint);margin-top:2px}
+section{margin:14px}
+.hero{padding:30px 18px 24px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);text-align:center;position:relative;overflow:hidden}
+.hero:before{content:"";position:absolute;inset:0 0 auto;height:3px;background:currentColor}
+.hero.ok{color:var(--ok)}.hero.warn{color:var(--warn)}.hero.danger{color:var(--danger)}
+.hero .k{font-size:11px;font-weight:900;letter-spacing:.15em;text-transform:uppercase;color:var(--text-faint)}
+.hero .v{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:800;font-size:58px;line-height:1.02;letter-spacing:-3px;margin:8px 0 4px;color:currentColor}
+.hero .pct{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;color:var(--text-dim)}
+.hero .cmp{display:inline-flex;align-items:center;gap:6px;margin-top:16px;padding:8px 14px;border-radius:99px;background:var(--surface-2);font-size:13.5px;font-weight:800;color:var(--text-dim)}
+.hero .cmp b{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:800;color:currentColor}
+h2{display:flex;align-items:center;gap:9px;margin:0 2px 11px;font-size:12px;font-weight:900;letter-spacing:.13em;text-transform:uppercase;color:var(--text-faint)}
+h2:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--caja);flex:none}
+h2:after{content:"";flex:1;height:1px;background:var(--border)}
+.casc{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:6px 15px}
+.row{display:flex;align-items:baseline;gap:10px;padding:11px 0}
+.row .op{width:13px;flex:none;font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:var(--text-faint);text-align:center}
+.row .lb{flex:1;font-size:14.5px;font-weight:800;color:var(--text-dim);line-height:1.25}
+.row .am{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:700;font-size:16px;color:var(--text-dim);white-space:nowrap}
+.row.sub{padding:13px 0}
+.row.sub .lb{color:var(--text);font-weight:900}
+.row.sub .am{color:var(--text);font-weight:800;font-size:17.5px}
+.row.sub .op{color:var(--text);font-weight:800}
+.row.sub .pc{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;color:var(--text-faint);margin-left:7px}
+.row.net .lb{font-family:'Fredoka One',cursive;font-weight:400;font-size:16px;letter-spacing:.2px}
+.row.net .am{font-size:22px;letter-spacing:-.8px}
+.row.net.ok .am,.row.net.ok .pc{color:var(--ok)}
+.row.net.warn .am,.row.net.warn .pc{color:var(--warn)}
+.row.net.danger .am,.row.net.danger .pc{color:var(--danger)}
+.rule{height:1px;background:var(--border);margin:2px 0}
+.rule.hard{height:2px;background:linear-gradient(90deg,var(--caja),var(--border))}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.st{padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);border-left:3px solid var(--c,var(--border))}
+.st span{display:block;font-size:10.5px;font-weight:900;letter-spacing:.11em;text-transform:uppercase;color:var(--text-faint);line-height:1.3;min-height:26px}
+.st b{display:block;font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:800;font-size:20px;letter-spacing:-.8px;margin-top:5px}
+.alert{display:flex;gap:11px;margin:0 0 11px;padding:13px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--pedidos);border-radius:var(--r-md)}
+.alert .ic{flex:none;font-size:17px;line-height:1.3}
+.alert p{margin:0;font-size:13.5px;font-weight:800;color:var(--text-dim);line-height:1.45}
+.alert p b{color:var(--text)}
+.pc-list{display:grid;gap:10px}
+.pcd{padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);border-left:3px solid var(--c)}
+.pcd .hd{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:12px}
+.pcd .nm{font-size:15px;font-weight:900;line-height:1.25;letter-spacing:-.1px}
+.badge{flex:none;display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:99px;font-size:11.5px;font-weight:900;letter-spacing:.02em;background:color-mix(in oklab,var(--c) 16%,var(--bg));color:var(--c);border:1px solid color-mix(in oklab,var(--c) 34%,var(--bg));white-space:nowrap}
+.mets{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.met span{display:block;font-size:10px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
+.met b{display:block;font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;margin-top:3px;color:var(--text-dim)}
+.met.hi b{color:var(--c);font-weight:800}
+.acts{display:grid;gap:10px;margin:20px 14px 0}
+.btn{min-height:var(--tap);height:54px;display:flex;align-items:center;justify-content:center;gap:9px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);color:var(--text);font:inherit;font-size:15px;font-weight:800;cursor:pointer;transition:background .14s,border-color .14s,transform .09s}
+.btn:active{transform:scale(.99)}
+.btn.pri{background:var(--caja);border-color:var(--caja);color:#04202f;font-family:'Fredoka One',cursive;font-weight:400;font-size:17px}
+.btn.sec:active{background:var(--surface-2);border-color:var(--caja)}
+.btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.toast{position:fixed;left:50%;bottom:28px;z-index:60;transform:translate(-50%,14px);background:var(--caja);color:#04202f;padding:13px 22px;border-radius:99px;font-size:14.5px;font-weight:900;opacity:0;pointer-events:none;transition:opacity .2s,transform .24s;white-space:nowrap;max-width:92vw}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+@media(min-width:560px){.mets{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<header><div class="brand"><span class="mk" role="img" aria-label="Manos Libres"></span><h1>Cierre semanal<i></i></h1></div></header>
+<div class="wk"><button class="nav" id="prev" aria-label="Semana anterior">‹</button><div class="wkl"><b id="wkRange">21/07 – 27/07</b><span id="wkTag">Semana 30</span></div><button class="nav" id="next" aria-label="Semana siguiente">›</button></div>
+
+<section><div class="hero" id="hero">
+<div class="k">Ganancia neta</div>
+<div class="v mono" id="hNeta">$ 173.600</div>
+<div class="pct mono" id="hPct">39,8% sobre ventas</div>
+<div class="cmp" id="hCmp"></div>
+</div></section>
+
+<section><h2>Desglose</h2><div class="casc" id="casc"></div></section>
+
+<section><h2>Resumen</h2><div class="stats" id="stats"></div></section>
+
+<section><h2>Rentabilidad por producto</h2><div id="alertBox"></div><div class="pc-list" id="prods"></div></section>
+
+<div class="acts">
+<button class="btn pri" data-exp="Rendición de cuentas"><svg viewBox="0 0 24 24"><path d="M14 3v5h5"></path><path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z"></path><path d="M9 13h6M9 17h4"></path></svg>Exportar rendición de cuentas</button>
+<button class="btn sec" data-exp="Impacto social"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.5-7-9.5A4 4 0 0 1 12 8a4 4 0 0 1 7 3.5c0 5-7 9.5-7 9.5z"></path></svg>Exportar impacto social</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var Q={estrella:{l:"Estrella",e:"⭐",c:"var(--ok)"},oportunidad:{l:"Oportunidad",e:"💎",c:"var(--warn)"},revisar:{l:"Revisar",e:"⚠️",c:"var(--pedidos)"},discontinuar:{l:"Discontinuar",e:"❌",c:"var(--danger)"}};
+var WEEKS=[
+{r:"07/07 – 13/07",t:"Semana 28",ventas:352000,cmv:151400,laboral:60000,opex:23800,prods:[
+{n:"Empanada de carne",u:198,f:158400,m:55.1,q:"revisar"},{n:"Empanada jamón y queso",u:104,f:83200,m:59.4,q:"revisar"},{n:"Empanada de verdura",u:71,f:53250,m:61.8,q:"estrella"},{n:"Tarta de verdura",u:11,f:38500,m:64.9,q:"oportunidad"},{n:"Tarta de carne",u:5,f:20000,m:58.2,q:"discontinuar"}]},
+{r:"14/07 – 20/07",t:"Semana 29",ventas:389200,cmv:163500,laboral:60000,opex:24400,prods:[
+{n:"Empanada de carne",u:214,f:171200,m:55.6,q:"revisar"},{n:"Empanada jamón y queso",u:112,f:89600,m:59.7,q:"revisar"},{n:"Empanada de verdura",u:80,f:60000,m:62.1,q:"estrella"},{n:"Tarta de verdura",u:12,f:42000,m:65.2,q:"oportunidad"},{n:"Tarta de carne",u:6,f:24000,m:60.8,q:"oportunidad"}]},
+{r:"21/07 – 27/07",t:"Semana 30",ventas:436500,cmv:176400,laboral:60000,opex:26500,prods:[
+{n:"Empanada de carne",u:240,f:192000,m:56.3,q:"revisar"},{n:"Empanada jamón y queso",u:120,f:96000,m:60.0,q:"revisar"},{n:"Empanada de verdura",u:90,f:67500,m:62.7,q:"estrella"},{n:"Tarta de verdura",u:14,f:49000,m:65.7,q:"oportunidad"},{n:"Tarta de carne",u:8,f:32000,m:62.5,q:"oportunidad"}]}];
+var i=WEEKS.length-1;
+function money(n){return "$ "+Math.round(n).toLocaleString("es-AR")}
+function pct(n){return n.toLocaleString("es-AR",{minimumFractionDigits:1,maximumFractionDigits:1})+"%"}
+function calc(w){var bruto=w.ventas-w.cmv,neta=bruto-w.laboral-w.opex;return{bruto:bruto,brutoP:bruto/w.ventas*100,neta:neta,netaP:neta/w.ventas*100}}
+function tone(p){return p<0?"danger":p<15?"warn":"ok"}
+function render(){
+var w=WEEKS[i],c=calc(w),prev=i>0?WEEKS[i-1]:null,t=tone(c.netaP);
+document.getElementById("wkRange").textContent=w.r;
+document.getElementById("wkTag").textContent=w.t;
+document.getElementById("prev").disabled=i===0;
+document.getElementById("next").disabled=i===WEEKS.length-1;
+var hero=document.getElementById("hero");hero.className="hero "+t;
+document.getElementById("hNeta").textContent=money(c.neta);
+document.getElementById("hPct").textContent=pct(c.netaP)+" sobre ventas";
+var cmp=document.getElementById("hCmp");
+if(prev){var pc=calc(prev),d=(c.neta-pc.neta)/pc.neta*100,up=d>=0;cmp.innerHTML='<span>'+(up?"↑":"↓")+'</span><b>'+(up?"+":"")+Math.round(d)+'%</b><span>vs. semana anterior</span>';cmp.style.display=""}
+else cmp.style.display="none";
+var rows=[["","Ventas totales",w.ventas,"lb-strong"],["–","Costo de mercadería",w.cmv],["rule"],["=","Margen bruto",c.bruto,"sub",c.brutoP],["–","Costo laboral",w.laboral],["–","Gastos operativos",w.opex],["hard"],["=","GANANCIA NETA",c.neta,"net",c.netaP]];
+var h="";rows.forEach(function(r){
+if(r[0]==="rule"){h+='<div class="rule"></div>';return}
+if(r[0]==="hard"){h+='<div class="rule hard"></div>';return}
+var cls="row"+(r[3]==="sub"?" sub":"")+(r[3]==="net"?" sub net "+t:"");
+h+='<div class="'+cls+'"><div class="op mono">'+r[0]+'</div><div class="lb">'+r[1]+'</div><div class="am mono">'+money(r[2])+(r[4]!=null?'<span class="pc">'+pct(r[4])+'</span>':'')+'</div></div>'});
+document.getElementById("casc").innerHTML=h;
+document.getElementById("stats").innerHTML=[
+["Ventas",money(w.ventas),"var(--caja)"],["Costo mercadería",money(w.cmv),"var(--produccion)"],
+["Costo laboral",money(w.laboral),"var(--equipo)"],["Margen neto",pct(c.netaP),"var("+(t==="ok"?"--ok":t==="warn"?"--warn":"--danger")+")"]
+].map(function(s){return '<div class="st" style="--c:'+s[2]+'"><span>'+s[0]+'</span><b>'+s[1]+'</b></div>'}).join("");
+var sorted=w.prods.slice().sort(function(a,b){return b.f-a.f});
+var top=sorted[0],worst=w.prods.slice().sort(function(a,b){return a.m-b.m})[0];
+document.getElementById("alertBox").innerHTML=(top.n===worst.n)?
+'<div class="alert"><div class="ic">⚠️</div><p><b>'+top.n+'</b> es el producto más vendido ('+top.u+' u · '+money(top.f)+') pero el de <b>peor margen ('+pct(top.m)+')</b>. Cada unidad extra mueve poco la ganancia: conviene revisar precio o costo.</p></div>':"";
+document.getElementById("prods").innerHTML=sorted.map(function(p){var q=Q[p.q];
+return '<div class="pcd" style="--c:'+q.c+'"><div class="hd"><div class="nm">'+p.n+'</div><div class="badge">'+q.e+' '+q.l+'</div></div><div class="mets"><div class="met"><span>Unidades</span><b>'+p.u+'</b></div><div class="met"><span>Facturación</span><b>'+money(p.f)+'</b></div><div class="met hi"><span>Margen</span><b>'+pct(p.m)+'</b></div></div></div>'}).join("");
+}
+document.getElementById("prev").addEventListener("click",function(){if(i>0){i--;render()}});
+document.getElementById("next").addEventListener("click",function(){if(i<WEEKS.length-1){i++;render()}});
+var toast=document.getElementById("toast");
+document.querySelectorAll("[data-exp]").forEach(function(b){b.addEventListener("click",function(){toast.textContent=b.dataset.exp+" · "+WEEKS[i].r;toast.classList.add("show");setTimeout(function(){toast.classList.remove("show")},2200)})});
+render();
+</script>
+</body>
+</html>

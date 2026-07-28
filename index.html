@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e0e10">
+<title>Cocina CIC · Manos Libres</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/logo-192.png">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+
+<!-- Gate de PIN: cubre todo hasta autenticar. Lo llena js/login.js -->
+<div class="login hidden" id="login"></div>
+
+<header class="app-header">
+  <!-- La marca sola: a 36px el texto del logo completo no se lee -->
+  <img class="logo" src="assets/logo-mark.png" alt="Manos Libres">
+  <div class="grow">
+    <div class="app-title">Cocina CIC</div>
+    <div class="faint" id="semana-label">—</div>
+  </div>
+  <button class="btn btn--ghost" id="btn-menu" aria-label="Menú">···</button>
+</header>
+
+<!-- Cada vista se renderiza desde su módulo en js/modules/ -->
+<main id="app">
+  <section class="view active" id="view-produccion"   data-module="produccion"></section>
+  <section class="view"        id="view-pedidos"      data-module="pedidos"></section>
+  <section class="view"        id="view-clientes"     data-module="pedidos"></section>
+  <section class="view"        id="view-trabajadoras" data-module="trabajadoras"></section>
+  <section class="view"        id="view-caja"         data-module="caja"></section>
+</main>
+
+<nav class="nav" id="nav">
+  <button data-tab="produccion"   class="active"><span class="dot"></span>Producción</button>
+  <button data-tab="pedidos"><span class="dot"></span>Pedidos</button>
+  <button data-tab="clientes"><span class="dot"></span>Clientes</button>
+  <button data-tab="trabajadoras"><span class="dot"></span>Equipo</button>
+  <button data-tab="caja"><span class="dot"></span>Caja</button>
+</nav>
+
+<!-- Modal único reutilizable: lo llena quien lo abre -->
+<div class="modal" id="modal" role="dialog" aria-modal="true">
+  <div class="modal__backdrop" data-close></div>
+  <div class="modal__panel">
+    <div class="modal__handle"></div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+  }
+</script>
+</body>
+</html>

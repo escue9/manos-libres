@@ -1,0 +1,20 @@
+# OneDrive
+*.tmp
+.~lock*
+desktop.ini
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+
+# Backups exportados de la app (contienen datos reales del negocio)
+backups/
+*.backup.json
+
+# Entorno
+.env
+.env.local

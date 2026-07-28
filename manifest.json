@@ -1,0 +1,23 @@
+{
+  "name": "Cocina CIC · Manos Libres",
+  "short_name": "Cocina CIC",
+  "description": "Gestión de producción, ventas, jornales y rentabilidad de la cocina comunitaria de Manos Libres.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e0e10",
+  "theme_color": "#0e0e10",
+  "lang": "es-AR",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "assets/logo-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/logo-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Venta rápida", "url": "./index.html#venta-rapida" },
+    { "name": "Cargar pedido", "url": "./index.html#nuevo-pedido" },
+    { "name": "Marcar jornada", "url": "./index.html#jornada" }
+  ]
+}

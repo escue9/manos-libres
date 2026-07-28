@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Registro de jornadas · Manos Libres</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800;900&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0e10;--surface:#16161a;--surface-2:#1e1e24;--border:#2a2a32;--text:#f2f2f5;--text-dim:#9a9aa8;--text-faint:#6a6a78;--produccion:#e8185a;--pedidos:#f55b1e;--clientes:#f5b800;--equipo:#1ec84a;--caja:#3db8f5;--ok:#1ec84a;--warn:#f5b800;--danger:#e8185a;--r-sm:10px;--r-md:14px;--r-lg:20px;--tap:48px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Nunito',system-ui,sans-serif;font-weight:800;overflow-x:hidden}
+body{max-width:520px;margin:0 auto;padding-bottom:calc(28px + env(safe-area-inset-bottom))}
+a{color:var(--equipo)}a:hover{color:var(--clientes)}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.switch{position:sticky;top:0;z-index:20;display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:0;padding:10px 14px;background:var(--bg);border-bottom:1px solid var(--border)}
+.switch button{min-height:44px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--text-faint);font:inherit;font-size:13px;font-weight:900;letter-spacing:.02em;cursor:pointer;transition:background .14s,color .14s,border-color .14s}
+.switch button.on{background:var(--surface-2);border-color:var(--equipo);color:var(--text)}
+
+.brand{display:flex;align-items:center;gap:11px}
+.brand .mk{width:40px;height:40px;flex:none;background:url("../../assets/logo-mark.png") center/contain no-repeat}
+header{padding:18px 16px 2px}
+h1{font-family:'Fredoka One',cursive;font-weight:400;font-size:26px;line-height:1;margin:0;letter-spacing:-.3px}
+h1 i{display:block;width:34px;height:4px;border-radius:2px;margin-top:9px;background:linear-gradient(90deg,var(--equipo),var(--caja))}
+.sub{margin:9px 0 0;font-size:13.5px;font-weight:800;color:var(--text-faint);line-height:1.4}
+.wk{display:flex;align-items:center;gap:8px;padding:14px 14px 2px}
+.nav{width:var(--tap);height:var(--tap);flex:none;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--surface);color:var(--text-dim);font-size:20px;font-weight:800;cursor:pointer}
+.nav:active{background:var(--surface-2);color:var(--text)}
+.nav:disabled{opacity:.32;cursor:not-allowed}
+.wkl{flex:1;height:var(--tap);display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm)}
+.wkl b{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:700;font-size:16px;letter-spacing:-.3px}
+.wkl span{font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--text-faint);margin-top:2px}
+section{margin:14px}
+.card{padding:15px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);margin-bottom:11px}
+.card.me{border-left:3px solid var(--equipo)}
+.chd{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:13px}
+.who .nm{font-size:17px;font-weight:900;letter-spacing:-.2px;line-height:1.2}
+.who .rate{display:block;margin-top:3px;font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;color:var(--text-faint)}
+.sum{text-align:right;flex:none}
+.sum b{display:block;font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:800;font-size:19px;letter-spacing:-.6px;color:var(--equipo)}
+.sum span{display:block;font-size:11px;font-weight:800;color:var(--text-faint);margin-top:2px}
+.days{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.d{position:relative;min-height:52px;border:1.5px solid var(--border);border-radius:var(--r-sm);background:var(--surface-2);color:var(--text-faint);font:inherit;font-size:15px;font-weight:900;cursor:pointer;transition:transform .1s,background .15s,color .15s,border-color .15s}
+.d:active{transform:scale(.9)}
+.d.on{background:var(--equipo);border-color:var(--equipo);color:#06200e}
+.d.pend{background:transparent;border:1.5px dashed var(--warn);color:var(--warn)}
+.d.pend:after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--warn)}
+.pn{display:flex;align-items:center;gap:9px;margin-top:12px;padding:11px 12px;background:var(--bg);border:1px dashed var(--warn);border-radius:var(--r-sm)}
+.pn .bd{flex:none;padding:5px 9px;border-radius:99px;background:color-mix(in oklab,var(--warn) 18%,var(--bg));color:var(--warn);font-size:11px;font-weight:900;letter-spacing:.02em}
+.pn p{flex:1;margin:0;font-size:12.5px;font-weight:800;color:var(--text-dim);line-height:1.35}
+.pn button{flex:none;min-height:40px;padding:0 14px;border:1px solid var(--warn);border-radius:var(--r-sm);background:transparent;color:var(--warn);font:inherit;font-size:13px;font-weight:900;cursor:pointer}
+.pn button:active{background:color-mix(in oklab,var(--warn) 16%,var(--bg))}
+.tot{padding:17px 16px;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--equipo);border-radius:var(--r-md)}
+.tot .lb{font-size:11px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint)}
+.tot .v{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:800;font-size:38px;line-height:1.05;letter-spacing:-1.8px;margin:5px 0 2px}
+.tot .meta{font-size:12.5px;font-weight:800;color:var(--text-faint)}
+.tot .hold{display:flex;align-items:center;gap:7px;margin-top:11px;padding-top:11px;border-top:1px solid var(--border);font-size:12.5px;font-weight:800;color:var(--warn)}
+.tot .hold b{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:800}
+.btn{width:100%;min-height:var(--tap);height:56px;margin-top:11px;display:flex;align-items:center;justify-content:center;gap:9px;border:0;border-radius:var(--r-md);background:var(--equipo);color:#06200e;font-family:'Fredoka One',cursive;font-weight:400;font-size:19px;cursor:pointer;transition:transform .09s,opacity .16s}
+.btn:active{transform:scale(.99)}
+.btn:disabled{background:var(--surface-2);color:var(--text-faint);cursor:not-allowed}
+.note{display:flex;gap:9px;margin:14px;padding:13px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--clientes);border-radius:var(--r-md)}
+.note svg{flex:none;width:17px;height:17px;margin-top:1px;stroke:var(--clientes);fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.note p{margin:0;font-size:13px;font-weight:800;color:var(--text-dim);line-height:1.45}
+.hint{margin:14px;font-size:12px;font-weight:800;color:var(--text-faint);text-align:center;line-height:1.5}
+.toast{position:fixed;left:50%;bottom:28px;z-index:60;transform:translate(-50%,14px);background:var(--equipo);color:#06200e;padding:13px 22px;border-radius:99px;font-size:14.5px;font-weight:900;opacity:0;pointer-events:none;transition:opacity .2s,transform .24s;max-width:92vw;text-align:center}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="switch"><button id="tabA" class="on">Vista admin</button><button id="tabB">Vista trabajadora</button></div>
+
+<div id="viewA">
+<header><div class="brand"><span class="mk" role="img" aria-label="Manos Libres"></span><div><h1>Equipo<i></i></h1></div></div><p class="sub">Jornadas y liquidación semanal</p></header>
+<div class="wk"><button class="nav" id="prevA" aria-label="Semana anterior">‹</button><div class="wkl"><b>21/07 – 27/07</b><span>Semana 30</span></div><button class="nav" id="nextA" aria-label="Semana siguiente" disabled>›</button></div>
+<section id="teamList"></section>
+<section><div class="tot">
+<div class="lb">Total a liquidar</div>
+<div class="v mono" id="totV">$ 0</div>
+<div class="meta" id="totMeta"></div>
+<div class="hold" id="totHold" hidden></div>
+</div><button class="btn" id="liq">Liquidar semana</button></section>
+</div>
+
+<div id="viewB" hidden>
+<header><div class="brand"><span class="mk" role="img" aria-label="Manos Libres"></span><div><h1 id="meName">Ana<i></i></h1></div></div><p class="sub">Tus jornadas de esta semana</p></header>
+<div class="wk"><button class="nav" aria-label="Semana anterior">‹</button><div class="wkl"><b>21/07 – 27/07</b><span>Semana 30</span></div><button class="nav" aria-label="Semana siguiente" disabled>›</button></div>
+<section><div class="card me">
+<div class="chd"><div class="who"><div class="nm">Tus días</div><span class="rate mono" id="meRate"></span></div><div class="sum"><b class="mono" id="meAmt">$ 0</b><span id="meDays">0 días</span></div></div>
+<div class="days" id="meDaysRow"></div>
+<div class="pn" id="mePend" hidden><div class="bd">Pendiente</div><p id="mePendTxt"></p></div>
+</div></section>
+<div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 8h.01M11 12h1v5h1"></path></svg><p>Tus días quedan pendientes hasta que <b>Juan Martín</b> los confirme. Si marcaste algo por error, tocá de nuevo para desmarcarlo.</p></div>
+<p class="hint">Tarifa diaria fija · se paga por día trabajado</p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var DN=["L","M","M","J","V","S","D"],RATE=5000;
+var TEAM=[
+{id:"ana",n:"Ana",rate:RATE,d:["ok","ok","ok","ok","ok",null,null]},
+{id:"maria",n:"María",rate:RATE,d:["ok","ok",null,"ok","ok",null,null]},
+{id:"rocio",n:"Rocío",rate:RATE,d:[null,"ok",null,"ok","pend",null,null]}];
+var ME="ana",liquidado=false;
+function money(n){return "$ "+Math.round(n).toLocaleString("es-AR")}
+function cnt(w,st){return w.d.filter(function(x){return st?x===st:x==="ok"}).length}
+function toast(m){var t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(function(){t.classList.remove("show")},2400)}
+function daysRow(w,mine){return w.d.map(function(s,k){var c="d"+(s==="ok"?" on":s==="pend"?" pend":"");return '<button class="'+c+'" data-w="'+w.id+'" data-k="'+k+'" data-mine="'+(mine?1:0)+'" aria-pressed="'+(s?"true":"false")+'" aria-label="'+DN[k]+'">'+DN[k]+'</button>'}).join("")}
+function renderA(){
+document.getElementById("teamList").innerHTML=TEAM.map(function(w){
+var ok=cnt(w),pe=cnt(w,"pend");
+return '<div class="card"><div class="chd"><div class="who"><div class="nm">'+w.n+'</div><span class="rate mono">'+money(w.rate)+' / día</span></div><div class="sum"><b class="mono">'+money(ok*w.rate)+'</b><span>'+ok+(ok===1?" día":" días")+'</span></div></div><div class="days">'+daysRow(w,false)+'</div>'+
+(pe?'<div class="pn"><div class="bd">Sin confirmar</div><p>'+pe+(pe===1?" jornada autoreportada":" jornadas autoreportadas")+' · '+money(pe*w.rate)+' no suma al total</p><button data-conf="'+w.id+'">Confirmar</button></div>':'')+'</div>'}).join("");
+var tot=0,pend=0,pd=0;TEAM.forEach(function(w){tot+=cnt(w)*w.rate;pd+=cnt(w,"pend");pend+=cnt(w,"pend")*w.rate});
+document.getElementById("totV").textContent=money(tot);
+var td=TEAM.reduce(function(a,w){return a+cnt(w)},0);
+document.getElementById("totMeta").textContent=TEAM.length+" personas · "+td+" jornadas confirmadas";
+var h=document.getElementById("totHold");
+if(pd){h.hidden=false;h.innerHTML='<span>⏳</span><span>'+pd+(pd===1?" jornada":" jornadas")+' sin confirmar · <b>'+money(pend)+'</b> retenido</span>'}else h.hidden=true;
+document.getElementById("liq").disabled=liquidado||tot===0;
+document.getElementById("liq").textContent=liquidado?"Semana liquidada":"Liquidar semana";
+}
+function renderB(){
+var w=TEAM.filter(function(x){return x.id===ME})[0],ok=cnt(w),pe=cnt(w,"pend");
+document.getElementById("meName").innerHTML=w.n+'<i></i>';
+document.getElementById("meRate").textContent=money(w.rate)+" / día";
+document.getElementById("meAmt").textContent=money(ok*w.rate);
+document.getElementById("meDays").textContent=ok+(ok===1?" día":" días");
+document.getElementById("meDaysRow").innerHTML=daysRow(w,true);
+var p=document.getElementById("mePend");
+if(pe){p.hidden=false;document.getElementById("mePendTxt").innerHTML=pe+(pe===1?" día marcado por vos":" días marcados por vos")+' · a confirmar'}else p.hidden=true;
+}
+function render(){renderA();renderB()}
+document.addEventListener("click",function(e){
+var d=e.target.closest(".d");
+if(d){var w=TEAM.filter(function(x){return x.id===d.dataset.w})[0],k=+d.dataset.k,mine=d.dataset.mine==="1",cur=w.d[k];
+if(mine)w.d[k]=cur?null:"pend";else w.d[k]=cur==="ok"?null:"ok";
+render();return}
+var c=e.target.closest("[data-conf]");
+if(c){var w2=TEAM.filter(function(x){return x.id===c.dataset.conf})[0];w2.d=w2.d.map(function(s){return s==="pend"?"ok":s});render();toast("Jornadas de "+w2.n+" confirmadas");return}
+});
+document.getElementById("liq").addEventListener("click",function(){var tot=0;TEAM.forEach(function(w){tot+=cnt(w)*w.rate});liquidado=true;render();toast("Semana liquidada · "+money(tot))});
+document.getElementById("tabA").addEventListener("click",function(){document.getElementById("tabA").classList.add("on");document.getElementById("tabB").classList.remove("on");document.getElementById("viewA").hidden=false;document.getElementById("viewB").hidden=true});
+document.getElementById("tabB").addEventListener("click",function(){document.getElementById("tabB").classList.add("on");document.getElementById("tabA").classList.remove("on");document.getElementById("viewB").hidden=false;document.getElementById("viewA").hidden=true});
+render();
+</script>
+</body>
+</html>

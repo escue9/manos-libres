@@ -1,0 +1,110 @@
+/* base.css — variables, tipografías, reset
+   Identidad Manos Libres: fondo negro, paleta multicolor por módulo. */
+
+@import url('https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@700;800&family=JetBrains+Mono:wght@500;700&display=swap');
+
+:root {
+  /* Superficies */
+  --bg:          #0e0e10;
+  --surface:     #16161a;
+  --surface-2:   #1e1e24;
+  --border:      #2a2a32;
+
+  /* Texto */
+  --text:        #f2f2f5;
+  --text-dim:    #9a9aa8;
+  --text-faint:  #6a6a78;
+
+  /* Colores por módulo */
+  --produccion:  #e8185a;   /* rosa */
+  --pedidos:     #f55b1e;   /* naranja */
+  --clientes:    #f5b800;   /* amarillo */
+  --equipo:      #1ec84a;   /* verde */
+  --caja:        #3db8f5;   /* azul */
+
+  /* Semánticos */
+  --ok:          #1ec84a;
+  --warn:        #f5b800;
+  --danger:      #e8185a;
+
+  /* Tipografía */
+  --font-title:  'Fredoka One', system-ui, sans-serif;
+  --font-body:   'Nunito', system-ui, sans-serif;
+  --font-mono:   'JetBrains Mono', ui-monospace, monospace;
+
+  /* Forma */
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+
+  /* Espaciado */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
+  --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+
+  /* Táctil — mínimo 44px, las trabajadoras cargan apuradas */
+  --tap: 48px;
+
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+body {
+  min-height: 100dvh;
+  padding-bottom: calc(72px + var(--safe-b)); /* espacio para la nav inferior */
+}
+
+h1, h2, h3 {
+  font-family: var(--font-title);
+  font-weight: 400;
+  margin: 0 0 var(--sp-3);
+  letter-spacing: .2px;
+}
+
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.2rem; }
+h3 { font-size: 1rem; }
+
+/* Los números siempre en mono y tabular: las columnas alinean solas */
+.num, td.num, .money {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+a { color: inherit; }
+
+button, input, select, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
+button { cursor: pointer; }
+
+/* Sin scroll horizontal en ningún caso */
+body, .view { overflow-x: hidden; }
+
+/* Utilidades mínimas */
+.row     { display: flex; align-items: center; gap: var(--sp-3); }
+.between { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.stack   { display: flex; flex-direction: column; gap: var(--sp-3); }
+.grow    { flex: 1; }
+.dim     { color: var(--text-dim); }
+.faint   { color: var(--text-faint); font-size: .85rem; }
+.hidden  { display: none !important; }
+.center  { text-align: center; }
+.right   { text-align: right; }
