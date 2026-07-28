@@ -76,10 +76,32 @@ Son referencia visual, no código a copiar. Ver las reglas de portado en `CLAUDE
 
 ### Deuda conocida
 
-- [ ] **Prueba offline sin hacer** — instalar la PWA en el celular y abrirla en
-      modo avión. Hay que hacerlo antes de que la app entre a la cocina.
 - [ ] **No se puede anular una venta** — hoy hay que borrarla desde la consola.
       Es lo primero que van a pedir apenas alguien tape de más.
+
+- [ ] **Falta implementar la conversión de unidades** (g↔kg, ml↔l) en
+      `calc.costoProducto()`. Está marcado como TODO. Sin eso, una receta que
+      mezcle gramos con kilos da un costo cualquiera.
+
+### Bloqueado hasta el deploy en Vercel
+
+Estas dos cosas **no se pueden verificar en desarrollo local** y quedan pendientes
+hasta que haya una URL con HTTPS:
+
+- [ ] Que la PWA se instale como app en el celular
+- [ ] Que abra en modo avión sin errores
+
+**Por qué:** el navegador expone `crypto.subtle` (el hash del PIN) y registra
+service workers **solo en contextos seguros** — HTTPS o `localhost`. Entrando
+desde el celular por IP de red local sobre HTTP, ninguna de las dos cosas existe.
+
+En `localhost` de la compu funciona todo, así que el desarrollo no está bloqueado.
+`js/login.js` detecta el contexto inseguro y muestra un aviso explicando esto, en
+vez de fallar en silencio.
+
+**Hay que probarlo antes de que la app entre a la cocina.** Si el offline falla,
+va a fallar el día que haya producción y todos estén apurados — y ahí se pierde
+la confianza del equipo, que es lo más difícil de recuperar.
 
 ---
 

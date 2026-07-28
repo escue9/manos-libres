@@ -72,18 +72,17 @@ Nueva, no estaba en el PDR: almacén clave/valor para el hash del admin y el sal
 - [ ] El botón de backup baja un `.json` con datos adentro
 - [ ] Cerrar y reabrir conserva los datos
 
-### ⚠️ Pendiente — prueba offline
+### ⚠️ Pendiente — requiere HTTPS
 
 - [ ] **Se instala como app desde el navegador del celular**
 - [ ] **Con modo avión activado, abre igual y no muestra error**
 
-Postergado a pedido de Juan Martín. **Hay que hacerlo antes de que la app entre a
-la cocina**, no antes de seguir programando.
+No se puede verificar en desarrollo local: el navegador registra service workers
+y expone `crypto.subtle` **solo en contextos seguros** (HTTPS o `localhost`).
+Desde el celular por IP de red local sobre HTTP, ninguna de las dos cosas existe.
 
-Por qué no se puede olvidar: el CIC tiene conexión inestable. Si el service worker
-no está cacheando bien, la app va a fallar justo el día que haya producción y todo
-el mundo esté apurado — y ahí se pierde la confianza del equipo, que es lo más
-difícil de recuperar.
+Queda para cuando se publique en Vercel. `js/login.js` ya detecta el caso y avisa
+en pantalla en vez de fallar en silencio.
 
 Si al probarlo falla, el sospechoso es el `SHELL` de `sw.js`: que falte un archivo
 o que `CACHE_VERSION` haya quedado vieja.

@@ -14,11 +14,40 @@ import { auth } from './auth.js';
 
 const N = auth.LARGO_PIN;
 
+/**
+ * El hash del PIN usa crypto.subtle, que el navegador SOLO expone en contextos
+ * seguros: HTTPS o localhost. Entrando por IP de red local sobre HTTP no existe,
+ * y sin este aviso el PIN fallaría en silencio.
+ *
+ * El service worker tiene la misma restricción: sin contexto seguro tampoco se
+ * instala la PWA ni funciona el modo offline.
+ */
+function avisarContextoInseguro(root, resolve) {
+  root.innerHTML = `
+    <div class="login__box">
+      <img class="login__logo" src="assets/logo-mark.png" alt="">
+      <h1 class="login__titulo">Conexión no segura</h1>
+      <p class="login__sub" style="margin-bottom:var(--sp-4)">
+        Estás entrando por <b>${location.protocol}//${location.host}</b>.
+      </p>
+      <p class="login__sub" style="text-align:left">
+        El navegador bloquea el cifrado del PIN y la instalación de la app
+        cuando la dirección no es <b>https://</b> ni <b>localhost</b>.
+      </p>
+      <p class="login__sub" style="text-align:left">
+        Para probar en el celular hay que publicarla con HTTPS. En la compu,
+        entrá por <b>http://localhost:8000</b>.
+      </p>
+    </div>`;
+}
+
 export function mostrarLogin() {
   return new Promise((resolve) => {
     const root = document.getElementById('login');
     root.classList.remove('hidden');
     document.body.classList.add('con-login');
+
+    if (!globalThis.crypto?.subtle) return avisarContextoInseguro(root, resolve);
 
     let modo = 'ingreso';
     let pin = '';
