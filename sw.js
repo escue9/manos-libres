@@ -8,7 +8,7 @@
  * Subí CACHE_VERSION en cada deploy o los usuarios quedan con la versión vieja.
  */
 
-const CACHE_VERSION = 'cocina-cic-v1';
+const CACHE_VERSION = 'cocina-cic-v2';
 
 const SHELL = [
   './',
@@ -31,6 +31,9 @@ const SHELL = [
   './assets/logo-192.png',
   './assets/logo-mark.png',
   './assets/favicon.png',
+  './assets/shortcut-venta.png',
+  './assets/shortcut-pedido.png',
+  './assets/shortcut-jornada.png',
 ];
 
 self.addEventListener('install', (e) => {
