@@ -384,6 +384,63 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
   return { costoInsumos, costoManoObra, ajustados: faltantes.length };
 }
 
+/**
+ * Bloque "Quiénes trabajan" de la orden.
+ *
+ * DECISIÓN DE PRIVACIDAD — la regla 8 protege la tarifa, los días acumulados y
+ * la liquidación de cada trabajadora. No dice que no puedan saber con quién
+ * están cocinando: están todas en la misma cocina y se ven.
+ *
+ * El riesgo real es otro: si una trabajadora puede recorrer las órdenes viejas,
+ * cada una con su fecha, reconstruye la asistencia completa de las demás. Eso sí
+ * son "los días de otra".
+ *
+ * Por eso el corte es por estado de la orden, no por rol:
+ *   - orden abierta  → se ven los nombres. Es la coordinación del día, que de
+ *                      todos modos tienen delante de los ojos
+ *   - orden cerrada  → el bloque desaparece para quien no sea admin. Ahí es
+ *                      historial, y el historial es lo que permite reconstruir
+ *
+ * Asignar sigue siendo solo del admin: la trabajadora ve los nombres, no los toca.
+ */
+function bloqueEquipo(orden, asignadas) {
+  const esAdmin = auth.puede('verEquipoCompleto');
+  const cerrada = orden.estado === 'cerrada' || orden.estado === 'cancelada';
+
+  if (!esAdmin && cerrada) return '';
+  if (!state.trabajadoras.length) {
+    return esAdmin
+      ? '<div class="bloque"><div class="bloque__titulo">Quiénes trabajan</div>'
+        + '<p class="faint" style="margin:0">No hay trabajadoras cargadas.</p></div>'
+      : '';
+  }
+
+  if (esAdmin) {
+    return `
+      <div class="bloque">
+        <div class="bloque__titulo">Quiénes trabajan</div>
+        <div class="chips" id="o-equipo">
+          ${state.trabajadoras.map((t) => `
+            <button class="chip ${asignadas.has(t.id) ? 'sel' : ''}" data-trab="${t.id}">${ui.esc(t.nombre)}</button>
+          `).join('')}
+        </div>
+        <p class="faint" style="margin:var(--sp-2) 0 0">Cada una suma su jornada del día con la tarifa congelada.</p>
+      </div>`;
+  }
+
+  // Trabajadora, orden abierta: solo lectura y solo las asignadas
+  const equipo = state.trabajadoras.filter((t) => asignadas.has(t.id));
+  if (!equipo.length) return '';
+
+  return `
+    <div class="bloque">
+      <div class="bloque__titulo">Quiénes trabajan hoy</div>
+      <div class="chips">
+        ${equipo.map((t) => `<span class="chip sel">${ui.esc(t.nombre)}</span>`).join('')}
+      </div>
+    </div>`;
+}
+
 /* --- ajustes de stock: siempre con motivo (regla 7) ---
  *
  * A propósito NO llevan auth.exigir(). Dos razones:
@@ -1164,18 +1221,7 @@ async function modalOrden(ordenId) {
         ` : '<p class="faint" style="margin:0">Ninguno de estos productos tiene receta cargada.</p>'}
       </div>
 
-      ${auth.puede('verEquipoCompleto') ? `
-        <div class="bloque">
-          <div class="bloque__titulo">Quiénes trabajan</div>
-          ${state.trabajadoras.length ? `
-            <div class="chips" id="o-equipo">
-              ${state.trabajadoras.map((t) => `
-                <button class="chip ${asignadas.has(t.id) ? 'sel' : ''}" data-trab="${t.id}">${ui.esc(t.nombre)}</button>
-              `).join('')}
-            </div>
-            <p class="faint" style="margin:var(--sp-2) 0 0">Cada una suma su jornada del día con la tarifa congelada.</p>
-          ` : '<p class="faint" style="margin:0">No hay trabajadoras cargadas.</p>'}
-        </div>` : ''}
+      ${bloqueEquipo(orden, asignadas)}
 
       <div class="stack" style="margin-top:var(--sp-5)">
         <button class="btn btn--primary btn--block" data-accent="produccion" id="o-cerrar">Cerrar orden</button>

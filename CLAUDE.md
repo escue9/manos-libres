@@ -116,7 +116,7 @@ Al portar un mockup:
 - [x] **Fase 0 — Fundación** · estructura PWA, `db.js`, auth por PIN, navegación, identidad visual
 - [x] **Fase 1 — Producción** · insumos, compras, recetas, costeo, órdenes, stock
 - [~] **Fase 2 — Ventas** · ✅ venta rápida · pendiente: clientes, pedidos, agenda
-- [ ] **Fase 3 — Equipo** · trabajadoras, jornadas, liquidación, vista por rol
+- [x] **Fase 3 — Equipo** · trabajadoras, jornadas, liquidación, vista por rol
 - [ ] **Fase 4 — Caja** · movimientos, cierre semanal, rentabilidad, exportables
 - [ ] **Fase 5 — Nube** · Supabase, RLS, sync, deploy en Vercel
 

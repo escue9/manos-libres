@@ -192,6 +192,38 @@ input[type="number"].input { font-family: var(--font-mono); }
   font-size: .8rem; font-weight: 800;
 }
 .days button.on { background: var(--equipo); border-color: transparent; color: #06210e; }
+.days button:active { transform: scale(.93); }
+
+/* Autoreportada por la trabajadora, todavía sin confirmar: no cuenta para la
+   liquidación, y el borde punteado lo tiene que decir sin leer nada. */
+.days button.pendiente {
+  background: transparent;
+  border: 2px dashed var(--equipo);
+  color: var(--equipo);
+}
+
+/* Ya liquidada: no se puede tocar más */
+.days button.pagada { opacity: .55; }
+.days button.pagada::after {
+  content: '✓'; position: absolute; margin-top: -22px; margin-left: 12px;
+  font-size: .6rem;
+}
+.days button { position: relative; }
+
+/* Navegación entre semanas */
+.semana-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-2); margin-bottom: var(--sp-4);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: var(--sp-1);
+}
+.semana-nav span { font-size: .9rem; font-weight: 800; }
+.semana-nav button {
+  min-width: 44px; min-height: 40px;
+  border: none; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-dim); font-size: 1.3rem; line-height: 1;
+}
+.semana-nav button:active { background: var(--surface-2); color: var(--text); }
 
 /* ---------- Modal ---------- */
 
