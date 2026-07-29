@@ -2,9 +2,9 @@ import "fake-indexeddb/auto";   // npm install fake-indexeddb
 import { webcrypto } from 'node:crypto';
 if (!globalThis.crypto?.subtle) Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 
-const { db, seed } = await import('./js/db.js');
-const { auth }     = await import('./js/auth.js');
-const calc         = await import('./js/calc.js');
+const { db, seed } = await import('../js/db.js');
+const { auth }     = await import('../js/auth.js');
+const calc         = await import('../js/calc.js');
 
 let ok = 0, mal = 0;
 const t = (nombre, cond) => { cond ? (ok++, console.log('  ✓', nombre))

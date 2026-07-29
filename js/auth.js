@@ -22,6 +22,7 @@ const PERMISOS = {
     verMargenes: true,
     verEquipoCompleto: true,
     editarPrecios: true,
+    gestionarInsumos: true,
     liquidar: true,
     exportar: true,
   },
@@ -32,6 +33,7 @@ const PERMISOS = {
     verMargenes: false,
     verEquipoCompleto: false,   // solo se ve a sí misma
     editarPrecios: false,
+    gestionarInsumos: false,    // sí carga y cierra órdenes de producción
     liquidar: false,
     exportar: false,
   },
@@ -42,6 +44,7 @@ const PERMISOS = {
     verMargenes: true,
     verEquipoCompleto: false,
     editarPrecios: false,
+    gestionarInsumos: false,
     liquidar: false,
     exportar: true,
   },

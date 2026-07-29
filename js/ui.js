@@ -17,7 +17,35 @@ export const ui = {
 
   money(n) { return fmtMoneda.format(Number(n) || 0); },
   pct(n)   { return `${(Number(n) || 0).toFixed(1)}%`; },
-  fecha(d) { return fmtFecha.format(d instanceof Date ? d : new Date(d)); },
+
+  /**
+   * Una fecha 'YYYY-MM-DD' se parsea como local, no como UTC.
+   * `new Date('2026-07-28')` es medianoche UTC, que en Argentina todavía es el
+   * 27 a las 21:00: sin esto, todas las fechas guardadas se muestran un día antes.
+   */
+  fecha(d) {
+    if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      const [a, m, dia] = d.split('-').map(Number);
+      return fmtFecha.format(new Date(a, m - 1, dia));
+    }
+    return fmtFecha.format(d instanceof Date ? d : new Date(d));
+  },
+
+  /** Fecha de hoy en 'YYYY-MM-DD' según el reloj local, no el UTC. */
+  hoyISO(fecha = new Date()) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${fecha.getFullYear()}-${p(fecha.getMonth() + 1)}-${p(fecha.getDate())}`;
+  },
+
+  /** 'unidad' es larguísima al lado de un número. En pantalla va como 'u'. */
+  unidadCorta(u) { return u === 'unidad' ? 'u' : (u || ''); },
+
+  /** Cantidad con su unidad. Hasta 2 decimales y sin ceros de relleno. */
+  cantidad(n, unidad = '') {
+    const v = Math.round((Number(n) || 0) * 100) / 100;
+    const txt = v.toLocaleString('es-AR', { maximumFractionDigits: 2 });
+    return unidad ? `${txt} ${this.unidadCorta(unidad)}` : txt;
+  },
 
   /** Escapa HTML. Usar en TODO lo que venga cargado por el usuario. */
   esc(s) {

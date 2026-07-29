@@ -272,7 +272,11 @@ export const db = {
 
 /**
  * seed() — datos iniciales para desarrollo.
- * TODO Fase 1: completar insumos reales con costos de Tandil y las recetas.
+ *
+ * Los costos de los insumos son el punto cero: se corrigen solos con la primera
+ * compra real, que recalcula el promedio ponderado. Las recetas NO se siembran
+ * a propósito — se arman desde la pantalla de Recetas con los insumos reales de
+ * la cocina, que es el trabajo de la puesta en marcha.
  */
 export async function seed() {
   const existentes = await db.from('unidad_negocio').select();
@@ -289,6 +293,19 @@ export async function seed() {
     { unidad_negocio_id: un.id, nombre: 'Tarta de verdura',       categoria: 'Tartas',    unidad_venta: 'unidad', precio_venta: 3500, costo_manual: 1200, stock_actual: 8,  stock_minimo: 2,  rinde_por_lote: 4,  activo: true },
     { unidad_negocio_id: un.id, nombre: 'Tarta de carne',         categoria: 'Tartas',    unidad_venta: 'unidad', precio_venta: 4000, costo_manual: 1500, stock_actual: 4,  stock_minimo: 2,  rinde_por_lote: 4,  activo: true },
     { unidad_negocio_id: un.id, nombre: 'Combo bondiola 6 porciones', categoria: 'Combos', unidad_venta: 'combo', precio_venta: 0,    costo_manual: 0,    stock_actual: 0,  stock_minimo: 0,  rinde_por_lote: 1,  activo: true },
+  ]);
+
+  await db.from('insumo').insert([
+    { unidad_negocio_id: un.id, nombre: 'Harina 000',        categoria: 'Almacén',     unidad_medida: 'kg',     costo_unitario: 1200, stock_actual: 25,  stock_minimo: 10, activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Carne picada',      categoria: 'Carnicería',  unidad_medida: 'kg',     costo_unitario: 9500, stock_actual: 8,   stock_minimo: 5,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Jamón cocido',      categoria: 'Carnicería',  unidad_medida: 'kg',     costo_unitario: 8200, stock_actual: 3,   stock_minimo: 2,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Queso muzzarella',  categoria: 'Lácteos',     unidad_medida: 'kg',     costo_unitario: 9000, stock_actual: 4,   stock_minimo: 2,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Cebolla',           categoria: 'Verdulería',  unidad_medida: 'kg',     costo_unitario: 1400, stock_actual: 6,   stock_minimo: 3,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Acelga',            categoria: 'Verdulería',  unidad_medida: 'kg',     costo_unitario: 1800, stock_actual: 4,   stock_minimo: 2,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Huevo',             categoria: 'Almacén',     unidad_medida: 'unidad', costo_unitario: 250,  stock_actual: 60,  stock_minimo: 24, activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Aceite',            categoria: 'Almacén',     unidad_medida: 'l',      costo_unitario: 2800, stock_actual: 5,   stock_minimo: 2,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Sal fina',          categoria: 'Almacén',     unidad_medida: 'kg',     costo_unitario: 900,  stock_actual: 3,   stock_minimo: 1,  activo: true },
+    { unidad_negocio_id: un.id, nombre: 'Bandeja de cartón', categoria: 'Packaging',   unidad_medida: 'unidad', costo_unitario: 180,  stock_actual: 100, stock_minimo: 30, activo: true },
   ]);
 
   await db.from('trabajadora').insert([

@@ -79,9 +79,8 @@ Son referencia visual, no código a copiar. Ver las reglas de portado en `CLAUDE
 - [ ] **No se puede anular una venta** — hoy hay que borrarla desde la consola.
       Es lo primero que van a pedir apenas alguien tape de más.
 
-- [ ] **Falta implementar la conversión de unidades** (g↔kg, ml↔l) en
-      `calc.costoProducto()`. Está marcado como TODO. Sin eso, una receta que
-      mezcle gramos con kilos da un costo cualquiera.
+- [x] ~~**Falta implementar la conversión de unidades** (g↔kg, ml↔l) en
+      `calc.costoProducto()`~~ — resuelto en la Fase 1, ver `docs/FASE-1.md`.
 
 ### Bloqueado hasta el deploy en Vercel
 

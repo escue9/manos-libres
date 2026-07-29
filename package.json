@@ -1,0 +1,13 @@
+{
+  "name": "cocina-cic",
+  "private": true,
+  "type": "module",
+  "description": "La app no tiene dependencias. Esto existe solo para correr los tests en Node.",
+  "scripts": {
+    "test": "node test/fase-0.test.mjs && node test/venta-rapida.test.mjs && node test/fase-1.test.mjs",
+    "serve": "python -m http.server 8000"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  }
+}

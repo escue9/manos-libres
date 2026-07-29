@@ -27,7 +27,9 @@ import { costoEfectivo } from '../calc.js';
 /** Carrito en memoria: producto_id → cantidad. Se vacía al confirmar. */
 let carrito = {};
 
-const hoyISO = () => new Date().toISOString().slice(0, 10);
+// Fecha local: toISOString() devuelve UTC y una venta de las 21:30 en la cancha
+// quedaría fechada mañana.
+const hoyISO = () => ui.hoyISO();
 
 /* ------------------------------------------------------------------ */
 /*  Transacción de venta                                               */
