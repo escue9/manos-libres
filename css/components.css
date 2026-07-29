@@ -202,6 +202,9 @@ input[type="number"].input { font-family: var(--font-mono); }
   color: var(--equipo);
 }
 
+/* Un día que todavía no pasó: no se puede haber trabajado */
+.days button:disabled { opacity: .3; pointer-events: none; }
+
 /* Ya liquidada: no se puede tocar más */
 .days button.pagada { opacity: .55; }
 .days button.pagada::after {
@@ -503,7 +506,14 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
 .cobro__label { font-size: .68rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; color: var(--text-faint); }
 .cobro__total {
   font-family: var(--font-mono); font-weight: 800; font-size: 2.8rem; line-height: 1.1;
-  letter-spacing: -2px; text-align: center; margin: 5px 0 var(--sp-5);
+  letter-spacing: -2px; text-align: center; margin: 5px 0 var(--sp-2);
+}
+
+/* Qué se está cobrando: el único control antes de una escritura irreversible */
+.cobro__detalle {
+  text-align: center; color: var(--text-dim);
+  font-size: .84rem; line-height: 1.35;
+  margin-bottom: var(--sp-5);
 }
 
 .chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }

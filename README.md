@@ -18,14 +18,15 @@ Después abrir http://localhost:8000 y probar **siempre en vista mobile**.
 - `CLAUDE.md` — las 8 reglas no negociables. Leer primero
 - `docs/PDR.md` — modelo de datos, flujos, fórmulas, roadmap
 - `docs/BRIEF-CODE.md` — **handoff para seguir el desarrollo**
-- `docs/FASE-0.md` · `docs/VENTA-RAPIDA.md` · `docs/FASE-1.md` — qué se construyó y por qué
+- `docs/FASE-0.md` · `docs/VENTA-RAPIDA.md` · `docs/FASE-1.md` · `docs/FASE-3.md` — qué se construyó y por qué
+- `docs/REVISION-FASES-2-3.md` — los 16 bugs que encontró la revisión profunda y cómo se arreglaron
 - `docs/BRIEF-DESIGN.md` — briefs para diseñar pantallas nuevas
 
 ## Tests
 
 ```bash
 npm install   # una sola vez, solo para testing
-npm test      # 135 pruebas
+npm test      # 226 pruebas
 ```
 
 ## Estado

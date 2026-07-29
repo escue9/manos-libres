@@ -24,7 +24,7 @@ import * as calc from '../calc.js';
 const CATEGORIAS_INSUMO = ['Almacén', 'Carnicería', 'Verdulería', 'Lácteos', 'Packaging', 'Otros'];
 
 const hoyISO = () => ui.hoyISO();
-const ahoraISO = () => new Date().toISOString();
+const ahoraISO = () => ui.ahoraISO();
 
 /** Agrupa un listado por el valor de un campo. */
 function agrupar(filas, campo) {
@@ -218,6 +218,12 @@ export async function crearOrden({ fecha = hoyISO(), items = [], notas = '' }) {
  * existe una ese día, se la vincula a la orden en vez de duplicarla.
  */
 export async function asignarTrabajadoras(ordenId, trabajadoraIds = []) {
+  // Las jornadas que crea acá nacen confirmadas, o sea que van derecho a la
+  // liquidación sin pasar por el circuito de autoreporte. Sin esta línea, una
+  // trabajadora podía autoasignarse días pagos desde la consola: el bloque de
+  // equipo estaba oculto en la interfaz, pero la función quedaba abierta.
+  auth.exigir('liquidar');
+
   const orden = await db.from('orden_produccion').select().eq('id', ordenId).single();
   if (!orden) throw new Error('Orden inexistente');
 

@@ -15,8 +15,10 @@ const t = (nombre, cond) => { cond ? (ok++, console.log('  ✓', nombre))
 const tira = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
 
 await seed();
-await state.cargar();
+// El rol va primero: state.cargar() recorta lo que ese rol puede tener en
+// memoria (tarifas ajenas, hash del PIN). La app hace lo mismo al loguear.
 auth.rol = 'admin';
+await state.cargar();
 
 const ana   = state.trabajadoras.find((x) => x.nombre === 'Ana');
 const maria = state.trabajadoras.find((x) => x.nombre === 'María');
@@ -83,8 +85,12 @@ t('queda marcada como autoreporte', auto.jornada.origen_carga === 'autoreporte')
 const ajena = await tira(() => eq.marcarJornada(ana.id, DOM, { origen: 'autoreporte' }));
 t('NO puede marcar el día de otra', ajena !== null);
 
-const comoAdmin = await tira(() => eq.marcarJornada(maria.id, DOM, { origen: 'admin' }));
-t('NO puede cargar como admin (no tiene liquidar)', comoAdmin !== null);
+/* El origen ya no es un parámetro: se deriva del rol. Antes, pasarle un valor
+   cualquiera salteaba las dos validaciones y dejaba tocar jornadas ajenas. */
+const colado = await eq.marcarJornada(maria.id, DOM, { origen: 'admin' });
+t('el origen que le pasen no cambia nada: sigue siendo autoreporte',
+  colado.jornada.origen_carga === 'autoreporte' && colado.jornada.confirmada === false);
+await eq.marcarJornada(maria.id, DOM);   // toggle: la borra y no ensucia los conteos
 
 const sinPermiso = await tira(() => eq.confirmarJornada(auto.jornada.id));
 t('NO puede confirmarse a sí misma', sinPermiso !== null);

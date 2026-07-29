@@ -37,6 +37,21 @@ export const ui = {
     return `${fecha.getFullYear()}-${p(fecha.getMonth() + 1)}-${p(fecha.getDate())}`;
   },
 
+  /**
+   * Marca de tiempo local para los movimientos de stock.
+   *
+   * A propósito no es `toISOString()`: eso da UTC, y una venta del domingo a
+   * las 21:30 quedaba con el movimiento fechado el lunes mientras el pedido
+   * decía domingo. Como los filtros de rango comparan strings, un día entero
+   * se caía del reporte. Con el prefijo local, la fecha del movimiento siempre
+   * coincide con la del pedido que lo originó.
+   */
+  ahoraISO(fecha = new Date()) {
+    const p = (n) => String(n).padStart(2, '0');
+    const hora = `${p(fecha.getHours())}:${p(fecha.getMinutes())}:${p(fecha.getSeconds())}`;
+    return `${this.hoyISO(fecha)}T${hora}`;
+  },
+
   /** 'unidad' es larguísima al lado de un número. En pantalla va como 'u'. */
   unidadCorta(u) { return u === 'unidad' ? 'u' : (u || ''); },
 

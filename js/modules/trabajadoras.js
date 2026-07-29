@@ -42,16 +42,38 @@ function fechasDeSemana(lunes) {
 /*  Transacciones                                                      */
 /* ================================================================== */
 
+/** Cuántos días para atrás puede autoreportar una trabajadora. */
+const DIAS_AUTOREPORTE = 14;
+
 /**
  * Marca o desmarca una jornada. Es un toggle: si ya existe, la borra.
  *
- * @param {'admin'|'autoreporte'} opciones.origen
+ * El origen NO es un parámetro: se deriva del rol de quien llama. Cuando era
+ * un parámetro, pasarle cualquier valor que no fuera 'admin' ni 'autoreporte'
+ * salteaba las dos validaciones, y desde la consola una trabajadora podía
+ * borrar y crear jornadas a nombre de otra — y usar el 'creada'/'borrada' que
+ * devuelve como oráculo para reconstruirle la semana entera.
+ *
  * @returns {Promise<{accion:'creada'|'borrada', jornada?:Object}>}
  */
-export async function marcarJornada(trabajadoraId, fecha, { origen = 'admin' } = {}) {
-  if (origen === 'admin') auth.exigir('liquidar');
-  if (origen === 'autoreporte' && auth.trabajadoraId !== trabajadoraId && !esAdmin()) {
+export async function marcarJornada(trabajadoraId, fecha) {
+  const admin = esAdmin();
+  if (admin) auth.exigir('liquidar');
+  else if (auth.trabajadoraId !== trabajadoraId) {
     throw new Error('Solo podés marcar tus propias jornadas');
+  }
+  const origen = admin ? 'admin' : 'autoreporte';
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || '')) throw new Error('Fecha inválida');
+
+  const hoy = ui.hoyISO();
+  if (fecha > hoy) throw new Error('No se puede marcar un día que todavía no pasó');
+
+  if (!admin) {
+    const limite = ui.hoyISO(new Date(Date.now() - DIAS_AUTOREPORTE * 864e5));
+    if (fecha < limite) {
+      throw new Error(`Solo podés marcar los últimos ${DIAS_AUTOREPORTE} días. Avisale a la administración`);
+    }
   }
 
   const existentes = await db.from('jornada').select()
@@ -62,6 +84,8 @@ export async function marcarJornada(trabajadoraId, fecha, { origen = 'admin' } =
     if (j.estado_pago === 'pagada') throw new Error('Esa jornada ya está liquidada');
     // Las que nacen de una orden se desasignan desde la orden, no de acá
     if (j.orden_produccion_id) throw new Error('Esa jornada viene de una orden de producción');
+    // Un tap sin querer no puede borrar lo que la administración ya revisó
+    if (!admin && j.confirmada) throw new Error('Ese día ya lo confirmó la administración');
     await db.from('jornada').delete().eq('id', j.id);
     return { accion: 'borrada' };
   }
@@ -88,6 +112,14 @@ export async function marcarJornada(trabajadoraId, fecha, { origen = 'admin' } =
 /** El admin confirma un autoreporte. Recién ahí cuenta para la liquidación. */
 export async function confirmarJornada(jornadaId, confirmada = true) {
   auth.exigir('liquidar');
+
+  const j = await db.from('jornada').select().eq('id', jornadaId).single();
+  if (!j) throw new Error('Jornada inexistente');
+
+  // Desconfirmar algo ya pagado saca el jornal del costo laboral pero deja el
+  // egreso en la caja: la rentabilidad y la caja dejarían de cerrar (regla 5)
+  if (j.estado_pago === 'pagada') throw new Error('Esa jornada ya está liquidada');
+
   await db.from('jornada').update({ confirmada }).eq('id', jornadaId);
   return db.from('jornada').select().eq('id', jornadaId).single();
 }
@@ -171,6 +203,18 @@ export async function guardarTrabajadora({ id = null, nombre, telefono = '', tar
   await db.from('trabajadora').update({ nombre, telefono, tarifa_dia: tarifaDia, activa }).eq('id', id);
 
   if (previa && previa.tarifa_dia !== tarifaDia) {
+    // Las trabajadoras que ya existían (seed, import) no tienen fila inicial.
+    // Sin sembrarla, el historial arrancaría recién hoy y una jornada vieja
+    // cargada más tarde se pagaría con la tarifa nueva.
+    const historial = await db.from('tarifa_historica').select().eq('trabajadora_id', id);
+    if (!historial.length) {
+      await db.from('tarifa_historica').insert({
+        trabajadora_id: id,
+        tarifa_dia: previa.tarifa_dia || 0,
+        vigente_desde: previa.fecha_ingreso || previa.created_at?.slice(0, 10) || ui.hoyISO(),
+      });
+    }
+
     await db.from('tarifa_historica').insert({
       trabajadora_id: id, tarifa_dia: tarifaDia, vigente_desde: ui.hoyISO(),
     });
@@ -183,9 +227,22 @@ export async function resumenSemana(desde, hasta) {
   const jornadas = auth.filtrarPropio(
     await db.from('jornada').select().gte('fecha', desde).lte('fecha', hasta),
   );
+
+  // state.trabajadoras trae solo las activas. Si alguien trabajó el lunes y la
+  // dieron de baja el miércoles, sus jornadas se liquidan igual —liquidarSemana
+  // no filtra por activa— pero no aparecían en el resumen: el admin veía un
+  // total y la caja registraba otro. Se suman las que tengan jornadas.
+  const conJornada = [...new Set(jornadas.map((j) => j.trabajadora_id))]
+    .filter((id) => !state.trabajadoras.some((t) => t.id === id));
+
+  const inactivas = conJornada.length
+    ? (await db.from('trabajadora').select()).filter((t) => conJornada.includes(t.id))
+    : [];
+
+  const todas = [...state.trabajadoras, ...inactivas];
   const visibles = esAdmin()
-    ? state.trabajadoras
-    : state.trabajadoras.filter((t) => t.id === auth.trabajadoraId);
+    ? todas
+    : todas.filter((t) => t.id === auth.trabajadoraId);
 
   const filas = visibles.map((t) => {
     const suyas = jornadas.filter((j) => j.trabajadora_id === t.id);
@@ -230,22 +287,30 @@ export async function render(vista) {
 
   const resumen = await resumenSemana(fechas[0], fechas[6]);
 
+  // Todo cuelga de un nodo propio, no de `vista`.
+  // `vista` es el <section> permanente del shell: los listeners colgados ahí
+  // sobreviven al innerHTML y se acumulan en cada render. Con un tap por día,
+  // eso llegaba a crear 26 jornadas donde iban 4 — y a liquidar 6 veces de más.
   vista.innerHTML = `
-    <div class="between" style="margin-bottom:var(--sp-3)">
-      <h1 style="margin:0">${esAdmin() ? 'Equipo' : 'Mis jornadas'}</h1>
-    </div>
+    <div id="equipo-root">
+      <div class="between" style="margin-bottom:var(--sp-3)">
+        <h1 style="margin:0">${esAdmin() ? 'Equipo' : 'Mis jornadas'}</h1>
+      </div>
 
-    <div class="semana-nav">
-      <button data-semana="-1" aria-label="Semana anterior">‹</button>
-      <span>${ui.fecha(fechas[0])} – ${ui.fecha(fechas[6])}</span>
-      <button data-semana="1" aria-label="Semana siguiente">›</button>
-    </div>
+      <div class="semana-nav">
+        <button data-semana="-1" aria-label="Semana anterior">‹</button>
+        <span>${ui.fecha(fechas[0])} – ${ui.fecha(fechas[6])}</span>
+        <button data-semana="1" aria-label="Semana siguiente">›</button>
+      </div>
 
-    ${resumen.filas.map((f) => tarjeta(f, fechas)).join('')}
-    ${esAdmin() ? bloqueLiquidacion(resumen) : bloquePropio(resumen)}
+      ${resumen.filas.map((f) => tarjeta(f, fechas)).join('')}
+      ${esAdmin() ? bloqueLiquidacion(resumen) : bloquePropio(resumen)}
+    </div>
   `;
 
-  vista.querySelector('.semana-nav').addEventListener('click', (e) => {
+  const root = vista.querySelector('#equipo-root');
+
+  root.querySelector('.semana-nav').addEventListener('click', (e) => {
     const b = e.target.closest('[data-semana]');
     if (!b) return;
     const d = new Date(semana);
@@ -254,7 +319,7 @@ export async function render(vista) {
     render(vista);
   });
 
-  vista.addEventListener('click', async (e) => {
+  root.addEventListener('click', async (e) => {
     const dia = e.target.closest('[data-dia]');
     if (dia) return toggleDia(dia, vista);
 
@@ -285,6 +350,7 @@ function tarjeta(f, fechas) {
       <div class="between">
         <div>
           <b>${ui.esc(f.trabajadora.nombre)}</b>
+          ${f.trabajadora.activa === false ? '<span class="badge">Ya no trabaja</span>' : ''}
           ${esAdmin() ? `<div class="faint">${ui.money(f.trabajadora.tarifa_dia)} por día</div>` : ''}
         </div>
         <div class="right">
@@ -296,11 +362,15 @@ function tarjeta(f, fechas) {
       <div class="days" style="margin-top:var(--sp-3)">
         ${fechas.map((fecha, i) => {
           const j = porFecha.get(fecha);
+          // Una jornada es un hecho: nadie trabajó todavía un día que no pasó.
+          // Se deshabilita en vez de dejar tocar y fallar con un toast.
+          const futuro = fecha > ui.hoyISO();
           const clases = ['', j ? 'on' : '',
                           j && !j.confirmada ? 'pendiente' : '',
                           j?.estado_pago === 'pagada' ? 'pagada' : ''].join(' ').trim();
           return `<button class="${clases}" data-dia="${fecha}" data-trab="${f.trabajadora.id}"
-                    title="${NOMBRE_DIA[i]} ${ui.fecha(fecha)}">${DIAS[i]}</button>`;
+                    ${futuro ? 'disabled' : ''}
+                    title="${NOMBRE_DIA[i]} ${ui.fecha(fecha)}${futuro ? ' · todavía no pasó' : ''}">${DIAS[i]}</button>`;
         }).join('')}
       </div>
 
@@ -374,9 +444,7 @@ async function toggleDia(btn, vista) {
   }
 
   try {
-    const { accion } = await marcarJornada(trabajadoraId, fecha, {
-      origen: esAdmin() ? 'admin' : 'autoreporte',
-    });
+    const { accion } = await marcarJornada(trabajadoraId, fecha);
     navigator.vibrate?.(12);
     if (accion === 'creada' && !esAdmin()) ui.toast('Queda pendiente de confirmar');
     await render(vista);

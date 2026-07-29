@@ -30,6 +30,7 @@ let carrito = {};
 // Fecha local: toISOString() devuelve UTC y una venta de las 21:30 en la cancha
 // quedaría fechada mañana.
 const hoyISO = () => ui.hoyISO();
+const ahoraISO = () => ui.ahoraISO();
 
 /* ------------------------------------------------------------------ */
 /*  Transacción de venta                                               */
@@ -37,7 +38,16 @@ const hoyISO = () => ui.hoyISO();
 
 /**
  * Una venta de mostrador es un pedido que nace entregado y cobrado.
- * Encadena, en este orden: pedido → items → cobro → caja → stock.
+ * Encadena, en este orden: pedido → items → cobro → caja → stock, y recién
+ * al final marca el pedido como entregado y pagado.
+ *
+ * Ese último paso es deliberado. IndexedDB no da una transacción que abarque
+ * las cinco tablas: si algo falla en el medio, lo ya escrito queda. Naciendo
+ * 'pendiente'/'impago', un fallo deja un pedido a medio hacer que NO cuenta
+ * ni en la rentabilidad (que mira 'entregado') ni en la caja (que mira los
+ * cobros). Si naciera 'entregado'/'pagado', un corte a mitad dejaría una
+ * venta fantasma sumando a la ganancia sin un peso de respaldo — devengado y
+ * caja quedarían irreconciliables para siempre.
  *
  * Los snapshots de precio y costo se congelan acá: si mañana sube la harina,
  * el margen de esta venta no cambia (PDR §3).
@@ -55,12 +65,13 @@ export async function registrarVenta({ lineas, medio, clienteId = null }) {
     canal: 'cic_presencial',
     fecha_pedido: fecha,
     fecha_entrega: fecha,
-    estado: 'entregado',
+    estado: 'pendiente',
     total,
     descuento: 0,
-    monto_cobrado: total,
-    estado_pago: 'pagado',
+    monto_cobrado: 0,
+    estado_pago: 'impago',
     created_by: auth.trabajadoraId,
+    created_by_rol: auth.rol,     // el admin no tiene trabajadora_id (auditoría)
   });
 
   await db.from('pedido_item').insert(lineas.map((l) => ({
@@ -87,22 +98,33 @@ export async function registrarVenta({ lineas, medio, clienteId = null }) {
     medio,
   });
 
-  // Stock: descuenta y deja rastro (regla 7)
+  // Stock: descuenta y deja rastro (regla 7).
+  // Se relee el producto en vez de usar el de state: la caché puede estar
+  // vieja si vendieron desde otra pestaña, y esto es un SET, no un decremento.
   for (const l of lineas) {
+    const actual = await db.from('producto').select().eq('id', l.producto.id).single();
+
     await db.from('producto')
-      .update({ stock_actual: (l.producto.stock_actual || 0) - l.cantidad })
+      .update({ stock_actual: (actual?.stock_actual ?? l.producto.stock_actual ?? 0) - l.cantidad })
       .eq('id', l.producto.id);
 
     await db.from('movimiento_stock_producto').insert({
       producto_id: l.producto.id,
-      fecha: new Date().toISOString(),
+      fecha: ahoraISO(),
       tipo: 'venta',
       cantidad: -l.cantidad,
       referencia_id: pedido.id,
     });
   }
 
-  return { pedido, total };
+  // Commit: a partir de acá la venta existe para la rentabilidad y la caja
+  const confirmado = await db.from('pedido').update({
+    estado: 'entregado',
+    monto_cobrado: total,
+    estado_pago: 'pagado',
+  }).eq('id', pedido.id).single();
+
+  return { pedido: confirmado ?? { ...pedido, estado: 'entregado', estado_pago: 'pagado' }, total };
 }
 
 async function totalVendidoHoy() {
@@ -135,12 +157,16 @@ function lineasDelCarrito() {
 function abrirCobro(total, onListo) {
   // Clientes ya cargados, para no tener que escribir el nombre
   const frecuentes = state.clientes.slice(0, 3);
+  const lineas = lineasDelCarrito();
   let medio = null;
   let clienteId = null;
 
   ui.abrirModal(`
     <div class="cobro__label center">Total a cobrar</div>
     <div class="cobro__total">${ui.money(total)}</div>
+
+    <div class="cobro__detalle">${lineas
+      .map((l) => `${l.cantidad}× ${ui.esc(l.producto.nombre)}`).join(' · ')}</div>
 
     ${frecuentes.length ? `
       <div class="cobro__label" style="margin-bottom:var(--sp-2)">¿Para quién? (opcional)</div>
@@ -180,14 +206,22 @@ function abrirCobro(total, onListo) {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       btn.textContent = 'Guardando…';
+
+      // Mientras guarda no se puede cerrar la hoja. Si se cerraba, el carrito
+      // seguía cargado y la venta se podía confirmar por segunda vez.
+      const cierres = document.querySelectorAll('#modal [data-close]');
+      cierres.forEach((el) => { el.style.pointerEvents = 'none'; });
+
       try {
-        await registrarVenta({ lineas: lineasDelCarrito(), medio, clienteId });
+        await registrarVenta({ lineas, medio, clienteId });
+        carrito = {};                       // se vacía apenas la venta existe
         ui.cerrarModal();
         onListo(total);
       } catch (err) {
         console.error(err);
         btn.disabled = false;
         btn.textContent = 'Confirmar venta';
+        cierres.forEach((el) => { el.style.pointerEvents = ''; });
         ui.toast('No se pudo registrar la venta', true);
       }
     });
@@ -219,29 +253,35 @@ export async function render(vista) {
     return acc;
   }, {});
 
+  // Todo cuelga de un nodo propio, no de `vista`.
+  // `vista` es el <section> permanente del shell: un listener colgado ahí
+  // sobrevive al innerHTML y se acumula en cada render, así que después de
+  // dos vueltas un tap sumaba dos empanadas y se cobraba el doble.
   vista.innerHTML = `
-    <div class="venta-header">
-      <h1>Venta rápida</h1>
-      <div class="venta-header__hoy">
-        <span>Hoy</span>
-        <b class="num" id="ventas-hoy">${ui.money(await totalVendidoHoy())}</b>
+    <div id="venta-root">
+      <div class="venta-header">
+        <h1>Venta rápida</h1>
+        <div class="venta-header__hoy">
+          <span>Hoy</span>
+          <b class="num" id="ventas-hoy">${ui.money(await totalVendidoHoy())}</b>
+        </div>
       </div>
-    </div>
 
-    ${Object.entries(porCategoria).map(([cat, items]) => `
-      <div class="categoria-titulo">${ui.esc(cat)}</div>
-      <div class="productos-grid">${items.map(tarjeta).join('')}</div>
-    `).join('')}
+      ${Object.entries(porCategoria).map(([cat, items]) => `
+        <div class="categoria-titulo">${ui.esc(cat)}</div>
+        <div class="productos-grid">${items.map(tarjeta).join('')}</div>
+      `).join('')}
 
-    <div class="venta-barra" id="barra">
-      <div class="venta-barra__top">
-        <div class="venta-barra__items" id="items">Sin items</div>
-        <div class="venta-barra__total" id="total">${ui.money(0)}</div>
+      <div class="venta-barra" id="barra">
+        <div class="venta-barra__top">
+          <div class="venta-barra__items" id="items">Sin items</div>
+          <div class="venta-barra__total" id="total">${ui.money(0)}</div>
+        </div>
+        <button class="btn--cobrar" id="cobrar" disabled>Cobrar</button>
       </div>
-      <button class="btn--cobrar" id="cobrar" disabled>Cobrar</button>
     </div>`;
 
-  cablear(vista);
+  cablear(vista.querySelector('#venta-root'));
 }
 
 function tarjeta(p) {
@@ -260,11 +300,11 @@ function tarjeta(p) {
     </button>`;
 }
 
-function cablear(vista) {
-  const barra = vista.querySelector('#barra');
-  const elItems = vista.querySelector('#items');
-  const elTotal = vista.querySelector('#total');
-  const btnCobrar = vista.querySelector('#cobrar');
+function cablear(root) {
+  const barra = root.querySelector('#barra');
+  const elItems = root.querySelector('#items');
+  const elTotal = root.querySelector('#total');
+  const btnCobrar = root.querySelector('#cobrar');
 
   const total = () => Object.entries(carrito)
     .reduce((a, [id, q]) => a + state.productoPorId(id).precio_venta * q, 0);
@@ -276,7 +316,7 @@ function cablear(vista) {
     elItems.textContent = n ? `${n} ${n === 1 ? 'item' : 'items'}` : 'Sin items';
     barra.classList.toggle('live', n > 0);
     btnCobrar.disabled = !n;
-    vista.querySelectorAll('.producto-card').forEach((b) => {
+    root.querySelectorAll('.producto-card').forEach((b) => {
       const q = carrito[b.dataset.id] || 0;
       b.classList.toggle('on', q > 0);
       b.querySelector('.producto-card__cantidad').textContent = q;
@@ -290,29 +330,55 @@ function cablear(vista) {
     pintar();
   }
 
-  vista.addEventListener('click', (e) => {
+  // Al soltar después de un long-press, el navegador sintetiza un click.
+  // Sin esta bandera ese click volvía a sumar y "mantener apretado para
+  // restar" no hacía nada: bajaba uno y lo devolvía en el mismo gesto.
+  let restadoAlMantener = false;
+
+  root.addEventListener('click', (e) => {
     const card = e.target.closest('.producto-card');
     if (!card) return;
+    if (restadoAlMantener) { restadoAlMantener = false; return; }
     sumar(card.dataset.id, e.target.closest('[data-menos]') ? -1 : 1);
   });
 
   // Mantener apretado también resta: no hay que apuntar al botón chico
   let timer = null;
-  vista.addEventListener('touchstart', (e) => {
+  const cancelar = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+  root.addEventListener('touchstart', (e) => {
     const card = e.target.closest('.producto-card');
     if (!card) return;
-    timer = setTimeout(() => { sumar(card.dataset.id, -1); timer = null; }, 480);
+    restadoAlMantener = false;
+    timer = setTimeout(() => {
+      sumar(card.dataset.id, -1);
+      restadoAlMantener = true;
+      timer = null;
+    }, 480);
   }, { passive: true });
-  ['touchend', 'touchmove', 'touchcancel'].forEach((ev) =>
-    vista.addEventListener(ev, () => { if (timer) { clearTimeout(timer); timer = null; } }, { passive: true }));
+
+  ['touchend', 'touchcancel'].forEach((ev) =>
+    root.addEventListener(ev, cancelar, { passive: true }));
+
+  // Un dedo apoyado nunca queda perfectamente quieto: sin tolerancia, el
+  // temblor cancelaba el long-press antes de llegar a los 480ms
+  let desde = null;
+  root.addEventListener('touchstart', (e) => {
+    desde = e.touches[0] ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+  }, { passive: true });
+  root.addEventListener('touchmove', (e) => {
+    if (!desde || !e.touches[0]) return cancelar();
+    const dx = e.touches[0].clientX - desde.x;
+    const dy = e.touches[0].clientY - desde.y;
+    if (Math.hypot(dx, dy) > 12) cancelar();
+  }, { passive: true });
 
   btnCobrar.addEventListener('click', () => {
     if (!unidades()) return;
     abrirCobro(total(), async (cobrado) => {
-      carrito = {};
       await state.cargar();                                   // refresca el stock
-      vista.querySelector('#ventas-hoy').textContent = ui.money(await totalVendidoHoy());
-      vista.querySelectorAll('.producto-card').forEach((b) => {
+      root.querySelector('#ventas-hoy').textContent = ui.money(await totalVendidoHoy());
+      root.querySelectorAll('.producto-card').forEach((b) => {
         const st = state.productoPorId(b.dataset.id)?.stock_actual || 0;
         const s = b.querySelector('.producto-card__stock');
         s.textContent = st > 0 ? `quedan ${st}` : 'sin stock cargado';

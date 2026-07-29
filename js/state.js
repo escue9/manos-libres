@@ -9,8 +9,26 @@
  */
 
 import { db } from './db.js';
+import { auth } from './auth.js';
 
 const listeners = new Map();
+
+/**
+ * Lo que de una trabajadora puede vivir en memoria según quién esté logueada.
+ *
+ * El hash del PIN no lo necesita nadie: sacarlo siempre. La tarifa ajena la
+ * prohíbe la regla 8, y ocultarla solo al renderizar no alcanza — el dato
+ * seguía estando a un `state.trabajadoras` de distancia en la consola.
+ * El nombre sí queda: la orden de producción abierta muestra con quién se
+ * está cocinando ese día (decisión de la fase 3, docs/FASE-3.md).
+ */
+function recortarTrabajadora(t) {
+  const { pin_acceso, ...resto } = t;
+  if (auth.puede('verEquipoCompleto') || t.id === auth.trabajadoraId) return resto;
+
+  const { tarifa_dia, telefono, ...publico } = resto;
+  return publico;
+}
 
 export const state = {
   unidadNegocio: null,
@@ -24,12 +42,17 @@ export const state = {
     this.unidadNegocio = await db.from('unidad_negocio').select().single();
     const un = this.unidadNegocio?.id;
 
-    [this.productos, this.insumos, this.trabajadoras, this.clientes] = await Promise.all([
+    const [productos, insumos, trabajadoras, clientes] = await Promise.all([
       db.from('producto').select().eq('unidad_negocio_id', un).order('nombre'),
       db.from('insumo').select().eq('unidad_negocio_id', un).order('nombre'),
       db.from('trabajadora').select().eq('unidad_negocio_id', un).eq('activa', true).order('nombre'),
       db.from('cliente').select().order('nombre'),
     ]);
+
+    this.productos = productos;
+    this.insumos = insumos;
+    this.clientes = clientes;
+    this.trabajadoras = trabajadoras.map(recortarTrabajadora);
   },
 
   /** Recarga los datos y avisa a las vistas para que se re-rendericen. */

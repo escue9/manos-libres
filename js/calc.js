@@ -152,18 +152,24 @@ export const MARGEN_MINIMO = 25;
  *
  * Se busca en tarifa_historica, NO en trabajadora.tarifa_dia: si la tarifa
  * subió en marzo, una jornada de febrero se sigue liquidando con la vieja.
- * El fallback existe para las trabajadoras cargadas antes de que hubiera
- * historial (PDR §3, tarifa_historica).
+ *
+ * Si la fecha es anterior a TODO el historial, se usa la fila más vieja, que
+ * es la tarifa más parecida a la que regía entonces. Antes caía al fallback
+ * —la tarifa de hoy— y cargar una jornada olvidada del mes pasado la pagaba
+ * al valor nuevo, que es exactamente lo que tarifa_historica viene a evitar.
+ * El fallback queda solo para quien no tiene ninguna fila histórica.
  *
  * @param {Array}  tarifas  tarifa_historica de UNA trabajadora
  * @param {string} fecha    ISO 'YYYY-MM-DD'
  * @param {number} fallback trabajadora.tarifa_dia
  */
 export function tarifaVigente(tarifas = [], fecha, fallback = 0) {
-  const vigentes = tarifas
-    .filter((t) => t.vigente_desde <= fecha)
-    .sort((a, b) => (a.vigente_desde < b.vigente_desde ? 1 : -1));
-  return vigentes.length ? vigentes[0].tarifa_dia : fallback;
+  if (!tarifas.length) return fallback;
+
+  const ordenadas = [...tarifas].sort((a, b) => (a.vigente_desde < b.vigente_desde ? 1 : -1));
+  const vigente = ordenadas.find((t) => t.vigente_desde <= fecha);
+
+  return vigente ? vigente.tarifa_dia : ordenadas[ordenadas.length - 1].tarifa_dia;
 }
 
 /* ------------------------------------------------------------------ */

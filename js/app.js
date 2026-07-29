@@ -117,6 +117,10 @@ async function descargarBackup() {
 async function arrancarSesion() {
   if (!auth.restaurarSesion()) await mostrarLogin();
 
+  // Recién ahora se sabe quién entró: el estado se recarga con lo que ese rol
+  // puede tener en memoria (state.js → recortarTrabajadora)
+  await state.cargar();
+
   aplicarPermisosAlNav();
   document.getElementById('semana-label').textContent = auth.permisos.etiqueta;
   await irA(auth.tabInicial);
@@ -144,6 +148,14 @@ init().catch((e) => {
   ui.toast('Error al iniciar la app', true);
 });
 
-// Consola de desarrollo
-window.db = db;
-window.auth = auth;
+/* Consola de desarrollo — solo en localhost.
+ *
+ * En el celular de la cocina esto anulaba todos los auth.exigir(): con la
+ * sesión de una trabajadora abierta, `auth.rol = 'admin'` alcanzaba para ver
+ * la caja, y `db.from('trabajadora').select()` devolvía nombres, tarifas y
+ * hashes de PIN de todo el equipo. Los permisos del código no valen nada si
+ * el objeto que los aplica está colgado de window. */
+if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+  window.db = db;
+  window.auth = auth;
+}
