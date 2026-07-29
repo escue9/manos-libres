@@ -52,6 +52,8 @@ function agrupar(filas, campo) {
  *   f) devuelve las alertas de margen para avisarlas con nombre y apellido
  */
 export async function registrarCompra({ insumoId, cantidad, costoTotal, proveedor = '', fecha = hoyISO(), medio = 'efectivo' }) {
+  auth.exigir('gestionarInsumos');
+
   cantidad = Number(cantidad);
   costoTotal = Number(costoTotal);
   if (!(cantidad > 0)) throw new Error('La cantidad tiene que ser mayor a cero');
@@ -382,7 +384,20 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
   return { costoInsumos, costoManoObra, ajustados: faltantes.length };
 }
 
-/* --- ajustes de stock: siempre con motivo (regla 7) --- */
+/* --- ajustes de stock: siempre con motivo (regla 7) ---
+ *
+ * A propósito NO llevan auth.exigir(). Dos razones:
+ *
+ * 1. cerrarOrden() llama a ajustarStockInsumo() cuando hay faltante, y cerrar
+ *    órdenes sí lo puede hacer una trabajadora. Guardar la función rompería
+ *    ese flujo legítimo.
+ * 2. Un ajuste mueve cantidades, no plata: no toca costo_unitario ni precios,
+ *    y siempre deja un movimiento_stock_* con motivo obligatorio. El daño
+ *    posible es acotado y auditable.
+ *
+ * El acceso por interfaz igual está restringido: la pantalla de Insumos
+ * completa está detrás de gestionarInsumos.
+ */
 
 export async function ajustarStockInsumo(insumoId, nuevoStock, motivo) {
   if (!motivo?.trim()) throw new Error('El ajuste necesita un motivo');
@@ -412,6 +427,8 @@ export async function ajustarStockProducto(productoId, nuevoStock, motivo) {
 
 /** Reemplaza la receta completa de un producto y recalcula su costo. */
 export async function guardarReceta(productoId, items, rindePorLote) {
+  auth.exigir('gestionarInsumos');
+
   const rinde = Number(rindePorLote);
   if (!(rinde > 0)) throw new Error('El rinde por lote tiene que ser mayor a cero');
 

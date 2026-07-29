@@ -168,3 +168,40 @@ liquidación). La Fase 1 ya dejó las jornadas creándose desde las órdenes, as
 que la 3 arranca con datos reales para mostrar.
 
 Sigue pendiente de la Fase 2 lo que ya estaba: **anular una venta**.
+
+---
+
+## Addendum — permisos aplicados en la función
+
+Los permisos se validaban solo en la interfaz: los botones se ocultaban, pero
+`registrarCompra()` y `guardarReceta()` seguían siendo invocables desde la
+consola con rol de trabajadora.
+
+Se agregó `auth.exigir(accion)`, que corta con error si el rol no tiene el
+permiso, y se aplicó en las dos funciones que tocan el costeo.
+
+**Por qué importa más allá de la consola:** en la fase 5 cada `exigir()` necesita
+su política de RLS equivalente en Supabase. Con el permiso escrito solo en la UI,
+ese contrato no existía en ningún lado ejecutable ni testeable — y la primera
+señal de que faltaba una política habría sido un error en producción.
+
+### Dónde NO se puso, y por qué
+
+`ajustarStockInsumo()` y `ajustarStockProducto()` quedan sin validación a
+propósito:
+
+1. `cerrarOrden()` llama a `ajustarStockInsumo()` cuando hay faltante, y cerrar
+   órdenes sí lo puede hacer una trabajadora. Guardar la función rompería ese
+   flujo legítimo.
+2. Un ajuste mueve cantidades, no plata: no toca `costo_unitario` ni precios, y
+   siempre deja un `movimiento_stock_*` con motivo obligatorio. El daño posible
+   es acotado y auditable.
+
+El acceso por interfaz igual está restringido: la pantalla de Insumos completa
+está detrás de `gestionarInsumos`.
+
+### Tests
+
+9 casos nuevos en `test/fase-1.test.mjs`. Los que importan son los que verifican
+que **no** pase nada: que tras el rechazo el costo del insumo no se haya movido y
+que no haya quedado un egreso huérfano en caja.

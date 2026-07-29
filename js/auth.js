@@ -96,6 +96,24 @@ export const auth = {
   puede(accion) { return !!this.permisos[accion]; },
   puedeVer(tab)  { return this.permisos.tabs.includes(tab); },
 
+  /**
+   * Valida un permiso y corta si no lo tiene.
+   *
+   * Va al principio de toda función que escriba datos sensibles. Ocultar el
+   * botón en la interfaz no alcanza: desde la consola la función sigue siendo
+   * invocable, y sobre todo el permiso queda escrito en un solo lugar (la UI)
+   * en vez de en el contrato de la función.
+   *
+   * En la fase 5 cada exigir() de acá tiene que tener su política de RLS
+   * equivalente en Supabase. Si el cliente no valida, la primera señal de que
+   * falta una política va a ser un error en producción.
+   */
+  exigir(accion) {
+    if (!this.puede(accion)) {
+      throw new Error(`Sin permiso para ${accion} (rol: ${this.rol || 'sin sesión'})`);
+    }
+  },
+
   /** Primera tab visible para el rol actual. Evita aterrizar en una prohibida. */
   get tabInicial() { return this.permisos.tabs[0]; },
 

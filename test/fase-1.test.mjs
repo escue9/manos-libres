@@ -257,5 +257,54 @@ t('la trabajadora NO ve costos', !auth.puede('verCostos'));
 t('la trabajadora NO ve al equipo completo', !auth.puede('verEquipoCompleto'));
 t('la trabajadora sí entra a producción', auth.puedeVer('produccion'));
 
+/* ================================================================== */
+console.log('\n── el permiso se aplica en la función, no solo en la interfaz');
+
+/* Ocultar el botón no alcanza: la función sigue siendo invocable desde la
+   consola. Y sobre todo, en la fase 5 cada uno de estos exigir() necesita su
+   política de RLS equivalente en Supabase. */
+
+const harinaPerm = insumo('Harina 000');
+const prodPerm = state.productos[0];
+
+auth.rol = 'trabajadora';
+auth.trabajadoraId = 'T1';
+
+const costoAntes = (await leer('insumo', harinaPerm.id)).costo_unitario;
+const errCompra = await tira(() => prod.registrarCompra({
+  insumoId: harinaPerm.id, cantidad: 10, costoTotal: 999999,
+}));
+t('registrarCompra rechaza a la trabajadora', errCompra !== null);
+t('el mensaje dice qué permiso falta', /gestionarInsumos/.test(errCompra?.message || ''));
+t('el costo del insumo no se movió',
+  (await leer('insumo', harinaPerm.id)).costo_unitario === costoAntes);
+
+const movimientos = await db.from('movimiento_caja').select();
+const egresosDeEsaCompra = movimientos.filter((m) => m.monto === 999999);
+t('no quedó un egreso huérfano en caja', egresosDeEsaCompra.length === 0);
+
+const errReceta = await tira(() => prod.guardarReceta(prodPerm.id, [], 24));
+t('guardarReceta rechaza a la trabajadora', errReceta !== null);
+
+/* Lo que la trabajadora SÍ tiene que poder hacer: producir. */
+const errOrden = await tira(() => prod.crearOrden({
+  items: [{ producto_id: prodPerm.id, cantidad: 24 }],
+}));
+t('crearOrden sí la deja: producir no es plata', errOrden === null);
+
+/* Los ajustes de stock quedan sin exigir() a propósito: cerrarOrden los usa
+   cuando hay faltante, y mueven cantidades, no costos. */
+const errAjuste = await tira(() =>
+  prod.ajustarStockInsumo(harinaPerm.id, 5, 'se cayó una bolsa'));
+t('ajustar stock sigue disponible para cerrar órdenes', errAjuste === null);
+t('el ajuste exige motivo',
+  (await tira(() => prod.ajustarStockInsumo(harinaPerm.id, 5, ''))) !== null);
+
+auth.rol = 'admin';
+t('el admin sí puede comprar',
+  (await tira(() => prod.registrarCompra({
+    insumoId: harinaPerm.id, cantidad: 1, costoTotal: 1000,
+  }))) === null);
+
 console.log(`\n${ok} pasaron · ${mal} fallaron\n`);
 process.exit(mal ? 1 : 0);
