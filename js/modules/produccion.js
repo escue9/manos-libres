@@ -186,6 +186,7 @@ export async function requerimientos(planificado) {
 
 /** Crea la orden con sus productos planificados. Nace en 'planificada'. */
 export async function crearOrden({ fecha = hoyISO(), items = [], notas = '' }) {
+  auth.exigir('cargarProduccion');
   const lineas = items.filter((i) => Number(i.cantidad) > 0);
   if (!lineas.length) throw new Error('La orden no tiene productos');
 
@@ -226,6 +227,14 @@ export async function asignarTrabajadoras(ordenId, trabajadoraIds = []) {
 
   const orden = await db.from('orden_produccion').select().eq('id', ordenId).single();
   if (!orden) throw new Error('Orden inexistente');
+
+  // Una jornada es un hecho, y estas nacen confirmadas: sin esta guarda se
+  // podía planificar la orden del sábado el viernes, asignar a dos personas y
+  // liquidar la semana pagando un día que todavía no pasó. Después no había
+  // forma de deshacerlo: la jornada quedaba 'pagada' y nada la podía tocar.
+  if (orden.fecha > ui.hoyISO()) {
+    throw new Error('La orden es de un día que todavía no pasó: asigná el equipo ese día');
+  }
 
   const actuales = await db.from('jornada').select().eq('orden_produccion_id', ordenId);
 
@@ -284,9 +293,25 @@ export async function asignarTrabajadoras(ordenId, trabajadoraIds = []) {
  * @param {string} motivoAjuste      obligatorio si hay faltantes
  */
 export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste = null } = {}) {
+  auth.exigir('cargarProduccion');
   const orden = await db.from('orden_produccion').select().eq('id', ordenId).single();
   if (!orden) throw new Error('Orden inexistente');
-  if (orden.estado === 'cerrada') throw new Error('La orden ya está cerrada');
+  if (orden.estado !== 'planificada' && orden.estado !== 'en_curso') {
+    throw new Error(`La orden está ${orden.estado}`);
+  }
+
+  // Se toma la orden ANTES de empezar, no al final. El chequeo de estado y el
+  // update de cierre estaban separados por decenas de escrituras: dos taps (o
+  // dos pestañas) pasaban los dos y sumaban el doble de producto terminado
+  // descontando los insumos una sola vez.
+  const tomada = await db.from('orden_produccion')
+    .update({ estado: 'en_curso' }).eq('id', ordenId).eq('estado', orden.estado);
+  if (!tomada.length) throw new Error('La orden ya la está cerrando alguien más');
+
+  /** Devuelve la orden a su estado anterior si se corta antes de escribir. */
+  const soltar = async () => {
+    await db.from('orden_produccion').update({ estado: orden.estado }).eq('id', ordenId);
+  };
 
   const [items, productos, recetas, insumos] = await Promise.all([
     db.from('produccion_item').select().eq('orden_produccion_id', ordenId),
@@ -298,14 +323,30 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
   const insumosPorId = new Map(insumos.map((i) => [i.id, i]));
   const recetasPorProducto = agrupar(recetas, 'producto_id');
 
-  const lineas = items.map((it) => {
-    const cantidad = cantidadesReales[it.id] != null
-      ? Number(cantidadesReales[it.id])
-      : it.cantidad_planificada;
-    return { item: it, producto: productos.find((p) => p.id === it.producto_id), cantidad };
-  }).filter((l) => l.producto);
+  let lineas;
+  try {
+    lineas = items.map((it) => {
+      const cantidad = cantidadesReales[it.id] != null
+        ? Number(cantidadesReales[it.id])
+        : it.cantidad_planificada;
+      if (!(cantidad >= 0)) throw new Error('La cantidad producida no puede ser negativa');
+      return { item: it, producto: productos.find((p) => p.id === it.producto_id), cantidad };
+    }).filter((l) => l.producto);
+  } catch (e) {
+    await soltar();
+    throw e;
+  }
 
-  const consumo = calc.consumoTotal(lineas, recetasPorProducto, insumosPorId);
+  // El insumo se descuenta por lo PLANIFICADO, no por lo que salió.
+  // Si se planificaron 48 empanadas y salieron 36, la harina de las 48 se usó
+  // igual: descontar por 36 dejaba media bolsa fantasma en el sistema cada
+  // jornada, y con cantidad real 0 la orden cerraba sin descontar nada.
+  const planificado = lineas.map((l) => ({
+    producto: l.producto,
+    cantidad: Math.max(l.cantidad, l.item.cantidad_planificada || 0),
+  }));
+
+  const consumo = calc.consumoTotal(planificado, recetasPorProducto, insumosPorId);
 
   /* --- a) insumos: primero verificar, después descontar --- */
 
@@ -314,6 +355,7 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
     .filter((f) => f.requerido > f.disponible + 1e-9);
 
   if (faltantes.length && !motivoAjuste?.trim()) {
+    await soltar();
     const err = new Error(`Falta stock de: ${faltantes.map((f) => f.insumo.nombre).join(', ')}`);
     err.faltantes = faltantes;
     throw err;
@@ -330,8 +372,12 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
     const insumo = insumosPorId.get(insumoId);
     costoInsumos += cant * (insumo.costo_unitario || 0);
 
+    // Se relee justo antes de escribir: entre el select del principio y este
+    // update pudo entrar una compra desde otra pestaña, y esto es un SET
+    const actual = await db.from('insumo').select().eq('id', insumoId).single();
+
     await db.from('insumo')
-      .update({ stock_actual: (insumo.stock_actual || 0) - cant })
+      .update({ stock_actual: (actual?.stock_actual ?? insumo.stock_actual ?? 0) - cant })
       .eq('id', insumoId);
 
     await db.from('movimiento_stock_insumo').insert({
@@ -360,8 +406,10 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
 
     if (!l.cantidad) continue;
 
+    const actualProd = await db.from('producto').select().eq('id', l.producto.id).single();
+
     await db.from('producto')
-      .update({ stock_actual: (l.producto.stock_actual || 0) + l.cantidad })
+      .update({ stock_actual: (actualProd?.stock_actual ?? l.producto.stock_actual ?? 0) + l.cantidad })
       .eq('id', l.producto.id);
 
     await db.from('movimiento_stock_producto').insert({
@@ -463,7 +511,9 @@ function bloqueEquipo(orden, asignadas) {
  */
 
 export async function ajustarStockInsumo(insumoId, nuevoStock, motivo) {
+  auth.exigir('cargarProduccion');
   if (!motivo?.trim()) throw new Error('El ajuste necesita un motivo');
+  if (!(Number(nuevoStock) >= 0)) throw new Error('El stock no puede quedar negativo');
   const insumo = await db.from('insumo').select().eq('id', insumoId).single();
   if (!insumo) throw new Error('Insumo inexistente');
 
@@ -476,7 +526,9 @@ export async function ajustarStockInsumo(insumoId, nuevoStock, motivo) {
 }
 
 export async function ajustarStockProducto(productoId, nuevoStock, motivo) {
+  auth.exigir('cargarProduccion');
   if (!motivo?.trim()) throw new Error('El ajuste necesita un motivo');
+  if (!(Number(nuevoStock) >= 0)) throw new Error('El stock no puede quedar negativo');
   const producto = await db.from('producto').select().eq('id', productoId).single();
   if (!producto) throw new Error('Producto inexistente');
 
@@ -486,6 +538,41 @@ export async function ajustarStockProducto(productoId, nuevoStock, motivo) {
     producto_id: productoId, fecha: ahoraISO(), tipo: 'ajuste', cantidad: delta, motivo: motivo.trim(),
   });
   return delta;
+}
+
+/**
+ * Edita un insumo. Si cambia la unidad de medida, convierte el stock y el
+ * costo en vez de dejar el número viejo con el significado nuevo.
+ *
+ * Pasar "Harina 000" de kg a g dejaba $1.200 por GRAMO y 25 gramos de stock:
+ * la empanada pasaba a costar $50.217 y el margen a −6.177%. El costo por
+ * unidad se mueve al revés que la cantidad — mil gramos por kilo significa
+ * mil veces más cantidad y mil veces menos costo por unidad.
+ */
+export async function guardarInsumo(insumoId, datos) {
+  auth.exigir('gestionarInsumos');
+
+  const previo = await db.from('insumo').select().eq('id', insumoId).single();
+  if (!previo) throw new Error('Insumo inexistente');
+
+  const cambia = datos.unidad_medida && datos.unidad_medida !== previo.unidad_medida;
+
+  if (cambia && !calc.sonCompatibles(previo.unidad_medida, datos.unidad_medida)) {
+    throw new Error(
+      `No se puede pasar de ${previo.unidad_medida} a ${datos.unidad_medida}: `
+      + 'dalo de baja y cargá un insumo nuevo',
+    );
+  }
+
+  const patch = { ...datos };
+  if (cambia) {
+    const factor = calc.convertir(1, previo.unidad_medida, datos.unidad_medida);
+    patch.stock_actual = (previo.stock_actual || 0) * factor;
+    patch.costo_unitario = (previo.costo_unitario || 0) / factor;
+  }
+
+  await db.from('insumo').update(patch).eq('id', insumoId);
+  return recalcularCostos([insumoId]);
 }
 
 /** Reemplaza la receta completa de un producto y recalcula su costo. */
@@ -502,6 +589,11 @@ export async function guardarReceta(productoId, items, rindePorLote) {
     if (!(Number(it.cantidad) > 0)) throw new Error(`Falta la cantidad de ${insumo.nombre}`);
     if (!calc.sonCompatibles(it.unidad_medida, insumo.unidad_medida)) {
       throw new Error(`${insumo.nombre} se mide en ${insumo.unidad_medida}: no se puede cargar en ${it.unidad_medida}`);
+    }
+    // Una merma de 900% multiplica el costo por diez; una negativa lo parte
+    const merma = Number(it.merma_pct) || 0;
+    if (merma < 0 || merma >= 100) {
+      throw new Error(`La merma de ${insumo.nombre} tiene que estar entre 0 y 99%`);
     }
   }
 
@@ -583,6 +675,30 @@ function fab(cont, onClick, titulo) {
 /** Recarga los datos y vuelve a pintar la vista activa. */
 async function refrescar() {
   await state.invalidar();
+}
+
+/**
+ * Cablea un botón de guardar deshabilitándolo mientras corre.
+ *
+ * Un doble tap dispara dos transacciones en paralelo, y las dos leen antes de
+ * que ninguna escriba. En el editor de recetas eso guardaba la receta dos
+ * veces y duplicaba el costo del producto — que después se congela en los
+ * snapshots y ya no se puede corregir sin tocar la base a mano.
+ */
+function alGuardar(btn, fn, textoOcupado = 'Guardando…') {
+  if (!btn) return;
+  const original = btn.textContent;
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = textoOcupado;
+    try {
+      await fn();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -710,7 +826,7 @@ function modalInsumo(insumo = null) {
       <button class="btn btn--primary btn--block" data-accent="produccion" id="f-guardar">Guardar</button>
     </div>
   `, (root) => {
-    root.querySelector('#f-guardar').addEventListener('click', async () => {
+    alGuardar(root.querySelector('#f-guardar'), async () => {
       const nombre = root.querySelector('#f-nombre').value.trim();
       if (!nombre) return ui.toast('Falta el nombre', true);
 
@@ -729,9 +845,7 @@ function modalInsumo(insumo = null) {
             ...datos, costo_unitario: 0, stock_actual: 0, activo: true,
           });
         } else {
-          await db.from('insumo').update(datos).eq('id', insumo.id);
-          // Cambiar la unidad de medida mueve el costo de todas las recetas
-          await recalcularCostos([insumo.id]);
+          await guardarInsumo(insumo.id, datos);
         }
         ui.cerrarModal();
         await refrescar();
@@ -801,9 +915,7 @@ function modalCompra(insumoId) {
     cant.addEventListener('input', preview);
     total.addEventListener('input', preview);
 
-    root.querySelector('#c-guardar').addEventListener('click', async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
+    alGuardar(root.querySelector('#c-guardar'), async () => {
       try {
         const { alertas } = await registrarCompra({
           insumoId,
@@ -819,7 +931,6 @@ function modalCompra(insumoId) {
         else ui.toast('Compra registrada');
       } catch (err) {
         console.error(err);
-        btn.disabled = false;
         ui.toast(err.message || 'No se pudo registrar la compra', true);
       }
     });
@@ -827,12 +938,16 @@ function modalCompra(insumoId) {
 }
 
 /** El aviso del PDR §4.1: qué producto quedó flojo y cuánto. */
-function modalAlertasMargen(alertas) {
-  if (!verCostos()) return ui.toast('Compra registrada');
+function modalAlertasMargen(alertas, titulo = 'Compra registrada') {
+  if (!verCostos()) return ui.toast(titulo);
+
+  const soloErrores = alertas.every((a) => a.error);
 
   ui.abrirModal(`
-    <h3>Compra registrada</h3>
-    <p class="dim" style="margin-top:calc(var(--sp-2) * -1)">Subió un costo y hay productos para revisar:</p>
+    <h3>${ui.esc(titulo)}</h3>
+    <p class="dim" style="margin-top:calc(var(--sp-2) * -1)">${soloErrores
+      ? 'Falta cargar algo para poder costear:'
+      : 'Subió un costo y hay productos para revisar:'}</p>
     <div class="stack" style="margin-top:var(--sp-4)">
       ${alertas.map((a) => `
         <div class="alerta alerta--${a.error ? 'danger' : 'warn'}">
@@ -862,7 +977,7 @@ function modalAjuste({ titulo, actual, valor, onGuardar }) {
     <div class="stack" style="margin-top:var(--sp-4)">
       <div class="field">
         <label for="aj-cant">Cantidad real contada</label>
-        <input class="input" id="aj-cant" type="number" inputmode="decimal" step="any" value="${valor}">
+        <input class="input" id="aj-cant" type="number" inputmode="decimal" step="any" min="0" value="${valor}">
       </div>
       <div class="field">
         <label for="aj-motivo">Motivo</label>
@@ -872,7 +987,7 @@ function modalAjuste({ titulo, actual, valor, onGuardar }) {
       <button class="btn btn--primary btn--block" data-accent="produccion" id="aj-guardar">Guardar ajuste</button>
     </div>
   `, (root) => {
-    root.querySelector('#aj-guardar').addEventListener('click', async () => {
+    alGuardar(root.querySelector('#aj-guardar'), async () => {
       try {
         await onGuardar(Number(root.querySelector('#aj-cant').value), root.querySelector('#aj-motivo').value);
         ui.cerrarModal();
@@ -1052,12 +1167,12 @@ function editorReceta(productoId, recetaOriginal) {
       pintarLineas();
     });
 
-    root.querySelector('#r-guardar')?.addEventListener('click', async () => {
+    alGuardar(root.querySelector('#r-guardar'), async () => {
       try {
         const alertas = await guardarReceta(productoId, lineas, rinde);
         ui.cerrarModal();
         await refrescar();
-        if (alertas.length) modalAlertasMargen(alertas);
+        if (alertas.length) modalAlertasMargen(alertas, 'Receta guardada');
         else ui.toast('Receta guardada');
       } catch (e) {
         ui.toast(e.message || 'No se pudo guardar la receta', true);
@@ -1146,7 +1261,7 @@ function modalNuevaOrden() {
       <button class="btn btn--primary btn--block" data-accent="produccion" id="o-crear">Crear orden</button>
     </div>
   `, (root) => {
-    root.querySelector('#o-crear').addEventListener('click', async () => {
+    alGuardar(root.querySelector('#o-crear'), async () => {
       const items = [...root.querySelectorAll('[data-prod]')].map((el) => ({
         producto_id: el.dataset.prod,
         cantidad: Number(el.querySelector('input').value) || 0,
@@ -1269,8 +1384,9 @@ async function modalOrden(ordenId) {
   });
 }
 
-function modalCerrarOrden(ordenId, items, reqs) {
+function modalCerrarOrden(ordenId, items, reqs, valores = null) {
   const faltantesPrevios = reqs.filter((r) => r.falta > 0);
+  const valorDe = (i) => (valores?.[i.id] != null ? valores[i.id] : i.cantidad_planificada);
 
   ui.abrirModal(`
     <h3>¿Cuánto salió?</h3>
@@ -1284,7 +1400,7 @@ function modalCerrarOrden(ordenId, items, reqs) {
           <div class="between" data-item="${i.id}">
             <span>${ui.esc(p?.nombre || '—')}</span>
             <input class="input cant-chica" type="number" inputmode="numeric" min="0"
-                   value="${i.cantidad_planificada}" aria-label="Salieron de ${ui.esc(p?.nombre || '')}">
+                   value="${valorDe(i)}" aria-label="Salieron de ${ui.esc(p?.nombre || '')}">
           </div>`;
       }).join('')}
 
@@ -1301,14 +1417,12 @@ function modalCerrarOrden(ordenId, items, reqs) {
       <button class="btn btn--primary btn--block" data-accent="produccion" id="cz-guardar">Cerrar orden</button>
     </div>
   `, (root) => {
-    root.querySelector('#cz-guardar').addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
+    alGuardar(root.querySelector('#cz-guardar'), async () => {
       const reales = {};
       root.querySelectorAll('[data-item]').forEach((el) => {
         reales[el.dataset.item] = Number(el.querySelector('input').value) || 0;
       });
 
-      btn.disabled = true;
       try {
         const r = await cerrarOrden(ordenId, reales, {
           motivoAjuste: root.querySelector('#cz-motivo')?.value || null,
@@ -1319,7 +1433,13 @@ function modalCerrarOrden(ordenId, items, reqs) {
           ? `Orden cerrada · insumos ${ui.money(r.costoInsumos)}`
           : 'Orden cerrada');
       } catch (e) {
-        btn.disabled = false;
+        // Si salió MÁS de lo planificado aparecen faltantes que la tabla de
+        // arriba no mostraba, y el campo de motivo no se había renderizado:
+        // sin esto quedaba un callejón sin salida y había que mentir el número
+        if (e.faltantes?.length && !root.querySelector('#cz-motivo')) {
+          ui.toast('Salió más de lo planificado: falta insumo', true);
+          return modalCerrarOrden(ordenId, items, e.faltantes.map((f) => ({ ...f, falta: 1 })), reales);
+        }
         ui.toast(e.message || 'No se pudo cerrar', true);
       }
     });

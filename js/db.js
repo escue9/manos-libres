@@ -108,6 +108,39 @@ async function writeMany(table, rows) {
   });
 }
 
+/**
+ * Aplica un patch a las filas que matcheen, TODO dentro de una sola
+ * transacción de lectura-escritura.
+ *
+ * Antes esto eran dos transacciones (leer todo → mapear → escribir todo) y
+ * además reescribía la fila entera, no las claves del patch. Dos escrituras
+ * concurrentes sobre la misma fila —dos pestañas, o el stock y el costo del
+ * mismo insumo— se pisaban: la segunda revertía a la primera sin ningún error.
+ * En una tabla donde el stock es sagrado (regla 7) eso es pérdida silenciosa.
+ */
+async function patchWhere(table, matchFn, patch) {
+  const idb = await open();
+  return new Promise((resolve, reject) => {
+    const tx = idb.transaction(table, 'readwrite');
+    const store = tx.objectStore(table);
+    const tocadas = [];
+
+    store.openCursor().onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (!cursor) return;
+      if (matchFn(cursor.value)) {
+        const fila = { ...cursor.value, ...patch, updated_at: nowISO(), sync_status: 'local' };
+        cursor.update(fila);
+        tocadas.push(fila);
+      }
+      cursor.continue();
+    };
+
+    tx.oncomplete = () => resolve(tocadas);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 async function deleteMany(table, ids) {
   const idb = await open();
   return new Promise((resolve, reject) => {
@@ -189,16 +222,19 @@ class Query {
       return Array.isArray(this._payload) ? rows : rows[0];
     }
 
-    const all = await readAll(t);
+    // Un .eq() olvidado en un módulo vaciaría o pisaría la tabla entera, y
+    // hasta la fase 5 el backup es la única copia que existe. Para tocar todo
+    // a propósito está db.reset().
+    if ((this._op === 'update' || this._op === 'delete') && !this.filters.length) {
+      throw new Error(`${this._op} sobre '${t}' sin filtros: falta un .eq()`);
+    }
 
     if (this._op === 'update') {
-      const targets = all.filter((r) => this._match(r));
-      const updated = targets.map((r) => ({
-        ...r, ...this._payload, updated_at: nowISO(), sync_status: 'local',
-      }));
-      await writeMany(t, updated);
+      const updated = await patchWhere(t, (r) => this._match(r), this._payload);
       return this._single ? updated[0] ?? null : updated;
     }
+
+    const all = await readAll(t);
 
     if (this._op === 'delete') {
       const ids = all.filter((r) => this._match(r)).map((r) => r.id);
@@ -213,7 +249,14 @@ class Query {
       rows.sort((a, b) => {
         const x = a[f], y = b[f];
         if (x === y) return 0;
-        return (x > y ? 1 : -1) * (asc ? 1 : -1);
+        if (x == null) return 1;      // nulls al final, como el default de Postgres
+        if (y == null) return -1;
+        // Los nombres se ordenan en castellano: con `>` puro, "Ñoquis" y
+        // "Ácido cítrico" caen después de la Z y parecen no estar cargados
+        const cmp = (typeof x === 'string' && typeof y === 'string')
+          ? x.localeCompare(y, 'es-AR', { sensitivity: 'base' })
+          : (x > y ? 1 : -1);
+        return cmp * (asc ? 1 : -1);
       });
     }
     if (this._limit != null) rows = rows.slice(0, this._limit);
@@ -231,18 +274,57 @@ export const db = {
     return new Query(table);
   },
 
-  /** Exporta toda la base a JSON. Es el backup de las fases 0 a 4. */
+  /**
+   * Exporta toda la base a JSON. Es el backup de las fases 0 a 4.
+   *
+   * Los PIN quedan afuera a propósito: el archivo se manda por WhatsApp o se
+   * guarda en Drive, y con el hash y el salt en el mismo JSON cuatro dígitos
+   * se rompen probando diez mil combinaciones. Al restaurar se vuelven a
+   * crear, que es un minuto de trabajo y no un riesgo permanente.
+   */
   async exportAll() {
     const out = { _version: DB_VERSION, _exported_at: nowISO() };
     for (const t of TABLES) out[t] = await readAll(t);
+
+    out.config = out.config.filter((c) => !['admin_pin', 'pin_salt'].includes(c.clave));
+    out.trabajadora = out.trabajadora.map(({ pin_acceso, ...t }) => t);
+
     return out;
   },
 
-  /** Restaura desde un export. Pisa lo existente. */
+  /**
+   * Restaura desde un export. REEMPLAZA todo lo que haya.
+   *
+   * Antes solo escribía encima fila por fila: lo borrado después del backup
+   * revivía y lo cargado después sobrevivía, así que "restaurar el backup del
+   * lunes" dejaba una mezcla de dos momentos distintos sin avisar a nadie.
+   * El PIN de administración se conserva, porque el export ya no lo trae.
+   */
   async importAll(data) {
-    for (const t of TABLES) {
-      if (Array.isArray(data[t]) && data[t].length) await writeMany(t, data[t]);
+    if (!data || typeof data !== 'object' || !Array.isArray(data.unidad_negocio)) {
+      throw new Error('El archivo no es una copia de seguridad de la cocina');
     }
+    if (data._version > DB_VERSION) {
+      throw new Error(`La copia es de una versión más nueva de la app (v${data._version})`);
+    }
+
+    const pins = (await readAll('config')).filter((c) => ['admin_pin', 'pin_salt', 'admin_nombre'].includes(c.clave));
+
+    for (const t of TABLES) {
+      await new Promise((res, rej) => {
+        open().then((idb) => {
+          const tx = idb.transaction(t, 'readwrite');
+          const store = tx.objectStore(t);
+          store.clear();
+          for (const fila of (Array.isArray(data[t]) ? data[t] : [])) store.put(fila);
+          if (t === 'config') for (const p of pins) store.put(p);
+          tx.oncomplete = res;
+          tx.onerror = () => rej(tx.error);
+        }, rej);
+      });
+    }
+
+    return TABLES.reduce((a, t) => a + (Array.isArray(data[t]) ? data[t].length : 0), 0);
   },
 
   async reset() {

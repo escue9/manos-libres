@@ -133,10 +133,14 @@ export function mostrarLogin() {
       root.classList.add('hidden');
       root.innerHTML = '';
       document.body.classList.remove('con-login');
+      document.removeEventListener('keydown', onKey);
       resolve(auth.rol);
     }
 
-    /* Teclado físico, para desarrollo en desktop */
+    /* Teclado físico, para desarrollo en desktop.
+       Se desregistra en cerrar(): antes solo se sacaba cuando llegaba una
+       tecla con el login ya oculto, así que después de cerrar sesión quedaba
+       vivo el de la sesión anterior y cada dígito contaba doble. */
     const onKey = (e) => {
       if (root.classList.contains('hidden')) return document.removeEventListener('keydown', onKey);
       if (/^\d$/.test(e.key)) tecla(e.key);

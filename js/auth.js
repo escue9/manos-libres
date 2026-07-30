@@ -23,6 +23,7 @@ const PERMISOS = {
     verEquipoCompleto: true,
     editarPrecios: true,
     gestionarInsumos: true,
+    cargarProduccion: true,
     liquidar: true,
     exportar: true,
   },
@@ -33,7 +34,8 @@ const PERMISOS = {
     verMargenes: false,
     verEquipoCompleto: false,   // solo se ve a sí misma
     editarPrecios: false,
-    gestionarInsumos: false,    // sí carga y cierra órdenes de producción
+    gestionarInsumos: false,    // no compra ni edita insumos ni recetas
+    cargarProduccion: true,     // sí carga órdenes, las cierra y cuenta stock
     liquidar: false,
     exportar: false,
   },
@@ -45,6 +47,7 @@ const PERMISOS = {
     verEquipoCompleto: false,
     editarPrecios: false,
     gestionarInsumos: false,
+    cargarProduccion: false,    // la comisión mira, no opera
     liquidar: false,
     exportar: true,
   },
@@ -124,15 +127,34 @@ export const auth = {
     return !!(await db.getConfig('admin_pin'));
   },
 
+  /**
+   * ¿Ese hash ya lo usa otra persona?
+   *
+   * ingresar() prueba el PIN primero contra el admin y después contra cada
+   * trabajadora, así que un PIN repetido no da error: te loguea como la otra
+   * persona. Con 1234 —el PIN más elegido del mundo— una trabajadora entraba
+   * como administración y veía la caja, los costos y la tarifa de sus
+   * compañeras. Rompe la regla 8 de punta a punta.
+   */
+  async _pinEnUso(hash, exceptoTrabajadoraId = null) {
+    if (hash === await db.getConfig('admin_pin')) return true;
+    const trabajadoras = await db.from('trabajadora').select();
+    return trabajadoras.some((t) => t.pin_acceso === hash && t.id !== exceptoTrabajadoraId);
+  },
+
   async crearPinAdmin(pin, nombre = 'Administración') {
     if (!/^\d{4}$/.test(pin)) throw new Error('El PIN tiene que ser de 4 dígitos');
-    await db.setConfig('admin_pin', await hashPin(pin));
+    const h = await hashPin(pin);
+    if (await this._pinEnUso(h)) throw new Error('Ese PIN ya está en uso, elegí otro');
+    await db.setConfig('admin_pin', h);
     await db.setConfig('admin_nombre', nombre);
   },
 
   async cambiarPinTrabajadora(trabajadoraId, pin) {
     if (!/^\d{4}$/.test(pin)) throw new Error('El PIN tiene que ser de 4 dígitos');
-    await db.from('trabajadora').update({ pin_acceso: await hashPin(pin) }).eq('id', trabajadoraId);
+    const h = await hashPin(pin);
+    if (await this._pinEnUso(h, trabajadoraId)) throw new Error('Ese PIN ya está en uso, elegí otro');
+    await db.from('trabajadora').update({ pin_acceso: h }).eq('id', trabajadoraId);
   },
 
   /* --- login --- */

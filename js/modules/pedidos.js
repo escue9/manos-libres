@@ -37,17 +37,40 @@ const ahoraISO = () => ui.ahoraISO();
 /* ------------------------------------------------------------------ */
 
 /**
- * Una venta de mostrador es un pedido que nace entregado y cobrado.
- * Encadena, en este orden: pedido → items → cobro → caja → stock, y recién
- * al final marca el pedido como entregado y pagado.
+ * Deshace una venta que quedó a medio escribir.
  *
- * Ese último paso es deliberado. IndexedDB no da una transacción que abarque
- * las cinco tablas: si algo falla en el medio, lo ya escrito queda. Naciendo
- * 'pendiente'/'impago', un fallo deja un pedido a medio hacer que NO cuenta
- * ni en la rentabilidad (que mira 'entregado') ni en la caja (que mira los
- * cobros). Si naciera 'entregado'/'pagado', un corte a mitad dejaría una
- * venta fantasma sumando a la ganancia sin un peso de respaldo — devengado y
- * caja quedarían irreconciliables para siempre.
+ * IndexedDB no da una transacción que abarque las cinco tablas, así que la
+ * atomicidad se construye a mano: si algo falla, se borra lo que se alcanzó a
+ * escribir y se devuelve el stock. Sin esto, un almacenamiento lleno en un
+ * celular viejo dejaba una venta fantasma sumando a la caja mientras la
+ * pantalla decía "no se pudo" — y la usuaria la volvía a cargar.
+ */
+async function revertirVenta(pedidoId, stockTocado) {
+  for (const { productoId, cantidad } of stockTocado) {
+    const actual = await db.from('producto').select().eq('id', productoId).single();
+    if (actual) {
+      await db.from('producto')
+        .update({ stock_actual: (actual.stock_actual || 0) + cantidad })
+        .eq('id', productoId);
+    }
+  }
+  await db.from('movimiento_stock_producto').delete().eq('referencia_id', pedidoId);
+  await db.from('pedido_item').delete().eq('pedido_id', pedidoId);
+  await db.from('cobro').delete().eq('pedido_id', pedidoId);
+  await db.from('pedido').delete().eq('id', pedidoId);
+}
+
+/**
+ * Una venta de mostrador es un pedido que nace entregado y cobrado.
+ *
+ * Orden: pedido (pendiente) → items → stock → cobro → caja → commit.
+ *
+ * El pedido nace 'pendiente'/'impago' y recién el último paso lo pasa a
+ * 'entregado'/'pagado'. El stock va antes que el cobro porque es el paso con
+ * más escrituras y el candidato más probable a fallar: si revienta ahí,
+ * todavía no se registró plata en la caja. Y si algo falla igual, se revierte
+ * todo: la rentabilidad (que mira 'entregado') y la caja (que mira los cobros)
+ * nunca quedan viendo media venta.
  *
  * Los snapshots de precio y costo se congelan acá: si mañana sube la harina,
  * el margen de esta venta no cambia (PDR §3).
@@ -74,57 +97,65 @@ export async function registrarVenta({ lineas, medio, clienteId = null }) {
     created_by_rol: auth.rol,     // el admin no tiene trabajadora_id (auditoría)
   });
 
-  await db.from('pedido_item').insert(lineas.map((l) => ({
-    pedido_id: pedido.id,
-    producto_id: l.producto.id,
-    cantidad: l.cantidad,
-    precio_unitario: l.producto.precio_venta,   // snapshot
-    costo_unitario: costoEfectivo(l.producto),  // snapshot
-  })));
+  const stockTocado = [];
 
-  const cobro = await db.from('cobro').insert({
-    pedido_id: pedido.id, fecha, monto: total, medio,
-  });
-
-  // Automático por la regla 6 de CLAUDE.md: nunca se carga a mano
-  await db.from('movimiento_caja').insert({
-    unidad_negocio_id: un,
-    fecha,
-    tipo: 'ingreso',
-    origen: 'cobro',
-    referencia_id: cobro.id,
-    monto: total,
-    descripcion: 'Venta rápida',
-    medio,
-  });
-
-  // Stock: descuenta y deja rastro (regla 7).
-  // Se relee el producto en vez de usar el de state: la caché puede estar
-  // vieja si vendieron desde otra pestaña, y esto es un SET, no un decremento.
-  for (const l of lineas) {
-    const actual = await db.from('producto').select().eq('id', l.producto.id).single();
-
-    await db.from('producto')
-      .update({ stock_actual: (actual?.stock_actual ?? l.producto.stock_actual ?? 0) - l.cantidad })
-      .eq('id', l.producto.id);
-
-    await db.from('movimiento_stock_producto').insert({
+  try {
+    await db.from('pedido_item').insert(lineas.map((l) => ({
+      pedido_id: pedido.id,
       producto_id: l.producto.id,
-      fecha: ahoraISO(),
-      tipo: 'venta',
-      cantidad: -l.cantidad,
-      referencia_id: pedido.id,
+      cantidad: l.cantidad,
+      precio_unitario: l.producto.precio_venta,   // snapshot
+      costo_unitario: costoEfectivo(l.producto),  // snapshot
+    })));
+
+    // Se relee el producto en vez de usar el de state: la caché puede estar
+    // vieja si vendieron desde otra pestaña, y esto es un SET, no un decremento
+    for (const l of lineas) {
+      const actual = await db.from('producto').select().eq('id', l.producto.id).single();
+
+      await db.from('producto')
+        .update({ stock_actual: (actual?.stock_actual ?? l.producto.stock_actual ?? 0) - l.cantidad })
+        .eq('id', l.producto.id);
+
+      stockTocado.push({ productoId: l.producto.id, cantidad: l.cantidad });
+
+      await db.from('movimiento_stock_producto').insert({
+        producto_id: l.producto.id,
+        fecha: ahoraISO(),
+        tipo: 'venta',
+        cantidad: -l.cantidad,
+        referencia_id: pedido.id,
+      });
+    }
+
+    const cobro = await db.from('cobro').insert({
+      pedido_id: pedido.id, fecha, monto: total, medio,
     });
+
+    // Automático por la regla 6 de CLAUDE.md: nunca se carga a mano
+    await db.from('movimiento_caja').insert({
+      unidad_negocio_id: un,
+      fecha,
+      tipo: 'ingreso',
+      origen: 'cobro',
+      referencia_id: cobro.id,
+      monto: total,
+      descripcion: 'Venta rápida',
+      medio,
+    });
+
+    // Commit: a partir de acá la venta existe para la rentabilidad y la caja
+    const confirmado = await db.from('pedido').update({
+      estado: 'entregado',
+      monto_cobrado: total,
+      estado_pago: 'pagado',
+    }).eq('id', pedido.id).single();
+
+    return { pedido: confirmado ?? { ...pedido, estado: 'entregado', estado_pago: 'pagado' }, total };
+  } catch (e) {
+    await revertirVenta(pedido.id, stockTocado);
+    throw e;
   }
-
-  // Commit: a partir de acá la venta existe para la rentabilidad y la caja
-  const confirmado = await db.from('pedido').update({
-    estado: 'entregado',
-    monto_cobrado: total,
-    estado_pago: 'pagado',
-  }).eq('id', pedido.id).single();
-
-  return { pedido: confirmado ?? { ...pedido, estado: 'entregado', estado_pago: 'pagado' }, total };
 }
 
 async function totalVendidoHoy() {
@@ -207,21 +238,21 @@ function abrirCobro(total, onListo) {
       btn.disabled = true;
       btn.textContent = 'Guardando…';
 
-      // Mientras guarda no se puede cerrar la hoja. Si se cerraba, el carrito
+      // Mientras guarda no se puede cerrar la hoja: si se cerraba, el carrito
       // seguía cargado y la venta se podía confirmar por segunda vez.
-      const cierres = document.querySelectorAll('#modal [data-close]');
-      cierres.forEach((el) => { el.style.pointerEvents = 'none'; });
+      ui.bloquearModal();
 
       try {
         await registrarVenta({ lineas, medio, clienteId });
         carrito = {};                       // se vacía apenas la venta existe
+        ui.bloquearModal(false);
         ui.cerrarModal();
         onListo(total);
       } catch (err) {
         console.error(err);
         btn.disabled = false;
         btn.textContent = 'Confirmar venta';
-        cierres.forEach((el) => { el.style.pointerEvents = ''; });
+        ui.bloquearModal(false);
         ui.toast('No se pudo registrar la venta', true);
       }
     });

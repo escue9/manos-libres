@@ -222,7 +222,8 @@ Una jornada de cocina. Descuenta insumos, suma producto terminado.
 | `monto_cobrado` | decimal | Suma de cobros. Derivado |
 | `estado_pago` | enum | `impago` \| `sena` \| `pagado` — derivado de cobros vs total |
 | `notas` | text | |
-| `created_by` | uuid FK trabajadora/admin | Auditoría |
+| `created_by` | uuid FK trabajadora | Auditoría. `null` si lo cargó el admin |
+| `created_by_rol` | enum | `admin` \| `trabajadora`. El admin no tiene fila en `trabajadora`, así que sin esto no se distingue "lo cargó la administración" de "no se sabe quién" |
 
 #### `pedido_item`
 | Campo | Tipo | Notas |

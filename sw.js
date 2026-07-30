@@ -29,6 +29,7 @@ const SHELL = [
   './js/modules/caja.js',
   './assets/logo.png',
   './assets/logo-192.png',
+  './assets/logo-maskable.png',
   './assets/logo-mark.png',
   './assets/favicon.png',
   './assets/shortcut-venta.png',
@@ -62,13 +63,21 @@ self.addEventListener('fetch', (e) => {
   // Las fuentes de Google se cachean al vuelo: si no hay red, se usa la del sistema
   const esFuente = url.hostname.includes('fonts.googleapis.com') || url.hostname.includes('fonts.gstatic.com');
 
-  // Navegación: red primero, cache como red de contención
+  // Navegación: red primero, cache como red de contención.
+  //
+  // El r.ok/r.type NO es opcional: sin eso se cacheaba CUALQUIER respuesta
+  // como index.html. En una red con portal cautivo —las del CIC y las de los
+  // clubes lo son— el fetch resuelve 200 con el HTML del portal, queda
+  // guardado, y a partir de ahí abrir la app sin internet muestra la pantalla
+  // del portal para siempre. Lo mismo con un 502 durante un deploy.
   if (request.mode === 'navigate') {
     e.respondWith(
       fetch(request)
         .then((r) => {
-          const copia = r.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put('./index.html', copia));
+          if (r.ok && r.type === 'basic') {
+            const copia = r.clone();
+            caches.open(CACHE_VERSION).then((c) => c.put('./index.html', copia));
+          }
           return r;
         })
         .catch(() => caches.match('./index.html'))
@@ -87,7 +96,12 @@ self.addEventListener('fetch', (e) => {
           }
           return r;
         })
-        .catch(() => cached);
+        // Sin red y sin copia hay que devolver una Response igual: si acá se
+        // resuelve undefined, respondWith tira y la pantalla queda en blanco
+        // sin explicación, que es justo lo que la regla 3 no permite
+        .catch(() => cached || new Response('Sin conexión y sin copia local', {
+          status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        }));
       return cached || red;
     })
   );

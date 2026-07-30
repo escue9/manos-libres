@@ -134,7 +134,11 @@ export async function liquidarSemana(desde, hasta, { medio = 'efectivo' } = {}) 
   auth.exigir('liquidar');
 
   const todas = await db.from('jornada').select().gte('fecha', desde).lte('fecha', hasta);
-  const aPagar = todas.filter((j) => j.confirmada && j.estado_pago !== 'pagada');
+
+  // Nunca se paga un día que todavía no pasó, venga de donde venga la jornada.
+  // Liquidar el viernes la semana en curso no puede adelantar el sábado.
+  const hoyLim = ui.hoyISO();
+  const aPagar = todas.filter((j) => j.confirmada && j.estado_pago !== 'pagada' && j.fecha <= hoyLim);
 
   if (!aPagar.length) throw new Error('No hay jornadas confirmadas para liquidar');
 
@@ -455,6 +459,23 @@ async function toggleDia(btn, vista) {
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * "2 × $5.000" desde las tarifas CONGELADAS de cada jornada, no desde la
+ * tarifa de hoy. Con la de hoy, subirle la tarifa a alguien el miércoles
+ * hacía que la última pantalla antes de pagar mostrara una multiplicación que
+ * no daba: 2 × $9.000 = $10.000.
+ */
+function desglosePendiente(f) {
+  const porTarifa = new Map();
+  for (const j of f.jornadas) {
+    if (!j.confirmada || j.estado_pago === 'pagada') continue;
+    porTarifa.set(j.tarifa_aplicada, (porTarifa.get(j.tarifa_aplicada) || 0) + 1);
+  }
+  return [...porTarifa.entries()]
+    .map(([tarifa, dias]) => `${dias} × ${ui.money(tarifa)}`)
+    .join(' + ');
+}
+
 function abrirLiquidacion(fechas, resumen, vista) {
   const conPendiente = resumen.filas.filter((f) => f.pendiente > 0);
 
@@ -469,7 +490,7 @@ function abrirLiquidacion(fechas, resumen, vista) {
         ${conPendiente.map((f) => `
           <tr>
             <td>${ui.esc(f.trabajadora.nombre)}</td>
-            <td class="num right dim">${f.dias} × ${ui.money(f.trabajadora.tarifa_dia)}</td>
+            <td class="num right dim">${desglosePendiente(f)}</td>
             <td class="num right"><b>${ui.money(f.pendiente)}</b></td>
           </tr>`).join('')}
       </tbody>

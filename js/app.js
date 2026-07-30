@@ -72,11 +72,17 @@ function abrirMenu() {
         <p class="faint" style="margin:0">
           Guarda todos los datos en un archivo. Hacelo cada semana:
           hasta que el sistema esté en la nube, es la única copia que existe.
+        </p>
+        <label class="btn btn--block" for="m-archivo">Restaurar desde una copia</label>
+        <input type="file" id="m-archivo" accept="application/json,.json" class="hidden">
+        <p class="faint" style="margin:0">
+          Reemplaza todos los datos actuales por los del archivo. El PIN no se toca.
         </p>` : ''}
       <button class="btn btn--block btn--danger" id="m-salir">Cerrar sesión</button>
     </div>
   `, (root) => {
     root.querySelector('#m-backup')?.addEventListener('click', descargarBackup);
+    root.querySelector('#m-archivo')?.addEventListener('change', (e) => restaurarBackup(e.target.files[0]));
     root.querySelector('#m-salir').addEventListener('click', async () => {
       ui.cerrarModal();
       auth.salir();
@@ -87,6 +93,7 @@ function abrirMenu() {
 
 async function descargarBackup() {
   try {
+    auth.exigir('exportar');
     const datos = await db.exportAll();
     const filas = Object.entries(datos)
       .filter(([k]) => !k.startsWith('_'))
@@ -94,19 +101,46 @@ async function descargarBackup() {
 
     const blob = new Blob([JSON.stringify(datos, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const hoy = new Date().toISOString().slice(0, 10);
 
+    // El <a> tiene que estar en el documento y el blob seguir vivo cuando
+    // arranca la descarga: fuera del DOM, Firefox no baja nada, y revocar la
+    // URL en la misma vuelta del event loop cancela lo que ya arrancó.
     const a = document.createElement('a');
     a.href = url;
-    a.download = `cocina-cic-${hoy}.json`;
+    a.download = `cocina-cic-${ui.hoyISO()}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
 
     ui.cerrarModal();
     ui.toast(`Copia descargada · ${filas} registros`);
   } catch (e) {
     console.error(e);
-    ui.toast('No se pudo generar la copia', true);
+    ui.toast(e.message || 'No se pudo generar la copia', true);
+  }
+}
+
+/** Restaurar reemplaza TODO. Se pregunta una vez, en criollo, y se recarga. */
+async function restaurarBackup(archivo) {
+  if (!archivo) return;
+  try {
+    auth.exigir('exportar');
+    const datos = JSON.parse(await archivo.text());
+    const fecha = datos._exported_at ? ui.fecha(datos._exported_at.slice(0, 10)) : 'sin fecha';
+
+    ui.cerrarModal();
+    const ok = await ui.confirmar(
+      `Esto reemplaza TODOS los datos de ahora por los de la copia del ${fecha}. `
+      + 'Lo que se cargó después se pierde.', 'Restaurar');
+    if (!ok) return;
+
+    const filas = await db.importAll(datos);
+    ui.toast(`Copia restaurada · ${filas} registros`);
+    setTimeout(() => location.reload(), 900);
+  } catch (e) {
+    console.error(e);
+    ui.toast(e.message || 'No se pudo leer el archivo', true);
   }
 }
 

@@ -56,9 +56,14 @@ export function convertir(cantidad, desde, hacia) {
  * PDR §5.1
  */
 export function costoPonderado(stockPrevio, costoPrevio, cantComprada, costoCompraUnit) {
-  const total = stockPrevio + cantComprada;
+  // Un stock negativo es un error de conteo, no mercadería que se deba. Si se
+  // lo deja entrar en la fórmula, el promedio se dispara: con −5 kg a $600 y
+  // una compra de 10 kg a $2.000, daba $3.400 el kilo — más caro que la bolsa
+  // más cara que se compró en la vida.
+  const previo = Math.max(0, stockPrevio);
+  const total = previo + cantComprada;
   if (total <= 0) return costoCompraUnit;
-  return (stockPrevio * costoPrevio + cantComprada * costoCompraUnit) / total;
+  return (previo * costoPrevio + cantComprada * costoCompraUnit) / total;
 }
 
 /**
@@ -85,11 +90,26 @@ export function consumoItem(item, insumo, lotes = 1) {
 export function costoProducto(recetaItems, insumosPorId, rindePorLote) {
   if (!recetaItems?.length || !rindePorLote) return null;
 
-  const costoLote = recetaItems.reduce((acc, it) => {
+  // Un insumo sin costo NO vale cero: vale "todavía no sabemos".
+  // Sumarlo como 0 daba una empanada a $50 con 93% de margen y ni una alerta,
+  // porque las alertas miran el margen bajo. Se firma el precio tranquilo y el
+  // número está mal. Mejor cortar acá, igual que con las unidades.
+  const sinCosto = recetaItems.filter((it) => {
     const insumo = insumosPorId.get(it.insumo_id);
-    if (!insumo) return acc;
-    return acc + consumoItem(it, insumo) * (insumo.costo_unitario || 0);
-  }, 0);
+    return !insumo || !(insumo.costo_unitario > 0);
+  });
+
+  if (sinCosto.length) {
+    const nombres = sinCosto
+      .map((it) => insumosPorId.get(it.insumo_id)?.nombre || 'un insumo borrado')
+      .join(', ');
+    throw new Error(`Sin costo cargado: ${nombres}. Registrá la compra primero`);
+  }
+
+  const costoLote = recetaItems.reduce(
+    (acc, it) => acc + consumoItem(it, insumosPorId.get(it.insumo_id)) * insumosPorId.get(it.insumo_id).costo_unitario,
+    0,
+  );
 
   return costoLote / rindePorLote;
 }
@@ -123,9 +143,13 @@ export function consumoTotal(planificado, recetasPorProducto, insumosPorId) {
   return total;
 }
 
-/** Costo efectivo: el de receta si existe, si no el manual. */
+/**
+ * Costo efectivo: el de receta si existe, si no el manual.
+ * `||` y no `??` a propósito: un costo calculado en 0 es una receta rota, no
+ * un producto gratis, y con `??` le ganaba al costo_manual cargado a mano.
+ */
 export function costoEfectivo(producto) {
-  return producto.costo_calculado ?? producto.costo_manual ?? 0;
+  return producto.costo_calculado || producto.costo_manual || 0;
 }
 
 /* ------------------------------------------------------------------ */

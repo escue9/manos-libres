@@ -112,5 +112,39 @@ const q = calc.cuadrantes([
 t('la mas vendida con peor margen cae en revisar', q[0].cuadrante === 'revisar');
 t('poco volumen y buen margen es oportunidad', q[3].cuadrante === 'oportunidad');
 
+/* ------------------------------------------------------------------ */
+/* Comprobaciones estáticas.
+   docs/FASE-0.md las daba por hechas y no existían en ninguna suite — y al
+   SHELL del service worker efectivamente le faltaba un ícono del manifest,
+   que es justo lo que rompe el modo avión. */
+console.log('\n── estáticas: PWA y reglas del repo');
+
+const { readFileSync, existsSync, readdirSync } = await import('node:fs');
+const leer = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+
+const sw = leer('sw.js');
+const shell = [...sw.matchAll(/'\.\/([^']+)'/g)].map((m) => m[1]);
+const faltantes = shell.filter((f) => !existsSync(new URL(`../${f}`, import.meta.url)));
+t(`los ${shell.length} archivos del SHELL existen`, faltantes.length === 0);
+if (faltantes.length) console.log('     faltan:', faltantes.join(', '));
+
+const manifest = JSON.parse(leer('manifest.json'));
+const iconos = [...manifest.icons, ...(manifest.shortcuts || []).flatMap((s) => s.icons || [])]
+  .map((i) => i.src);
+t('los íconos del manifest existen', iconos.every((i) => existsSync(new URL(`../${i}`, import.meta.url))));
+t('y todos están cacheados en el SHELL', iconos.every((i) => shell.includes(i)));
+
+const modulos = readdirSync(new URL('../js/modules', import.meta.url)).map((f) => `js/modules/${f}`);
+t('ningún módulo usa indexedDB directo (regla 1)',
+  modulos.every((m) => !/\bindexedDB\b/.test(leer(m))));
+t('ni localStorage en ningún lado',
+  ['js/app.js', 'js/auth.js', 'js/state.js', 'js/ui.js', ...modulos]
+    .every((m) => !/\blocalStorage\b/.test(leer(m))));
+
+const html = leer('index.html');
+t('cada getElementById de app.js tiene su id en el HTML',
+  [...leer('js/app.js').matchAll(/getElementById\('([^']+)'\)/g)]
+    .every((m) => html.includes(`id="${m[1]}"`)));
+
 console.log(`\n${ok} pasaron · ${mal} fallaron\n`);
 process.exit(mal ? 1 : 0);

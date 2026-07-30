@@ -22,17 +22,26 @@ alguien que está cargando sin mirar la pantalla.
 
 ## Qué pasa al confirmar
 
-Una venta de mostrador es un pedido que nace entregado y cobrado. En orden:
+Una venta de mostrador es un pedido que **termina** entregado y cobrado. En orden:
 
 ```
-pedido (estado: entregado, canal: cic_presencial, estado_pago: pagado)
+pedido (estado: pendiente, canal: cic_presencial, estado_pago: impago)
   └─ pedido_item[]        con precio_unitario y costo_unitario CONGELADOS
+  └─ por cada producto:
+       ├─ producto.stock_actual  descontado (releído de la base, no de la caché)
+       └─ movimiento_stock_producto  tipo 'venta', cantidad negativa
   └─ cobro                monto y medio
        └─ movimiento_caja ingreso automático, apunta al cobro
-  └─ por cada producto:
-       ├─ producto.stock_actual  descontado
-       └─ movimiento_stock_producto  tipo 'venta', cantidad negativa
+  └─ pedido → entregado / pagado / monto_cobrado      ← el commit
 ```
+
+**El pedido nace `pendiente` y recién el último paso lo confirma.** IndexedDB no
+da una transacción que abarque las cinco tablas: si algo falla en el medio, se
+revierte todo lo escrito y se devuelve el stock. Naciendo `entregado`/`pagado`,
+un corte a mitad dejaba una venta fantasma sumando a la ganancia sin un peso de
+respaldo, y la usuaria —que veía "no se pudo"— la volvía a cargar. El stock va
+antes que el cobro porque es el paso con más escrituras: si revienta ahí,
+todavía no se registró plata en la caja.
 
 **Los snapshots son el punto clave.** Si mañana sube la carne, el margen de las
 ventas de hoy no cambia. Los reportes históricos quedan inmutables (PDR §3).

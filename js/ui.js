@@ -11,6 +11,28 @@ const fmtMoneda = new Intl.NumberFormat('es-AR', {
 
 const fmtFecha = new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit' });
 
+/** Estado del modal único. Ver abrirModal() / bloquearModal(). */
+let modalBloqueado = false;
+let alCerrarModal = null;
+
+/**
+ * Convierte a Date tratando 'YYYY-MM-DD' como fecha LOCAL, no como UTC.
+ *
+ * `new Date('2026-07-28')` es medianoche UTC, que en Argentina todavía es el
+ * 27 a las 21:00: sin esto las fechas guardadas se muestran un día antes y
+ * inicioSemana() devuelve la semana anterior. Devuelve null si no hay fecha.
+ */
+function parseLocal(d) {
+  if (d == null || d === '') return null;
+  if (d instanceof Date) return isNaN(d.getTime()) ? null : d;
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d)) {
+    const [a, m, dia] = d.slice(0, 10).split('-').map(Number);
+    return new Date(a, m - 1, dia);
+  }
+  const f = new Date(d);
+  return isNaN(f.getTime()) ? null : f;
+}
+
 export const ui = {
 
   /* --- formato --- */
@@ -24,11 +46,8 @@ export const ui = {
    * 27 a las 21:00: sin esto, todas las fechas guardadas se muestran un día antes.
    */
   fecha(d) {
-    if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
-      const [a, m, dia] = d.split('-').map(Number);
-      return fmtFecha.format(new Date(a, m - 1, dia));
-    }
-    return fmtFecha.format(d instanceof Date ? d : new Date(d));
+    const f = parseLocal(d);
+    return f ? fmtFecha.format(f) : '—';
   },
 
   /** Fecha de hoy en 'YYYY-MM-DD' según el reloj local, no el UTC. */
@@ -71,9 +90,13 @@ export const ui = {
 
   /* --- semana --- */
 
-  /** Lunes de la semana de una fecha. La semana operativa arranca lunes. */
+  /**
+   * Lunes de la semana de una fecha. La semana operativa arranca lunes.
+   * Acepta Date o 'YYYY-MM-DD': con el string, `new Date()` a secas devolvía
+   * la semana ANTERIOR para todos los lunes, porque parseaba en UTC.
+   */
   inicioSemana(fecha = new Date()) {
-    const d = new Date(fecha);
+    const d = parseLocal(fecha) || new Date();
     const dia = (d.getDay() + 6) % 7;       // 0 = lunes
     d.setDate(d.getDate() - dia);
     d.setHours(0, 0, 0, 0);
@@ -128,11 +151,19 @@ export const ui = {
 
   /* --- modal --- */
 
-  abrirModal(html, onMount) {
+  /**
+   * @param {Function} onMount   recibe el nodo de contenido ya montado
+   * @param {Function} onCerrar  se llama SIEMPRE que el modal se cierra, por
+   *                             donde sea: botón, fondo o cerrarModal() directo
+   */
+  abrirModal(html, onMount, onCerrar = null) {
     const modal = document.getElementById('modal');
     document.getElementById('modal-content').innerHTML = html;
     modal.classList.add('open');
     document.body.style.overflow = 'hidden';
+
+    modalBloqueado = false;      // cada modal nuevo arranca desbloqueado
+    alCerrarModal = onCerrar;
 
     modal.querySelectorAll('[data-close]').forEach((el) =>
       el.addEventListener('click', () => this.cerrarModal(), { once: true })
@@ -140,9 +171,25 @@ export const ui = {
     onMount?.(document.getElementById('modal-content'));
   },
 
+  /**
+   * Traba el cierre mientras una operación está guardando.
+   *
+   * Antes esto se hacía apagando `pointerEvents` de los `[data-close]`, y como
+   * el fondo del modal es un nodo permanente de index.html, el estilo quedaba
+   * pegado para el resto de la sesión: después de la primera venta, ningún
+   * modal se podía volver a cerrar tocando afuera.
+   */
+  bloquearModal(v = true) { modalBloqueado = v; },
+
   cerrarModal() {
+    if (modalBloqueado) return false;
     document.getElementById('modal').classList.remove('open');
     document.body.style.overflow = '';
+
+    const cb = alCerrarModal;
+    alCerrarModal = null;
+    cb?.();
+    return true;
   },
 
   /* --- toast --- */
@@ -156,9 +203,16 @@ export const ui = {
     setTimeout(() => el.remove(), 2800);
   },
 
-  /** Confirmación. Devuelve una promesa que resuelve true/false. */
+  /**
+   * Confirmación. Devuelve una promesa que resuelve true/false.
+   *
+   * Resuelve por CUALQUIER vía de cierre. Antes solo el click en el fondo
+   * resolvía `false`: tocar "Cancelar" cerraba el modal y dejaba la promesa
+   * colgada para siempre, con el handler que la esperaba a medio ejecutar.
+   */
   confirmar(mensaje, textoOk = 'Confirmar') {
     return new Promise((resolve) => {
+      let valor = false;
       this.abrirModal(`
         <h3>${this.esc(mensaje)}</h3>
         <div class="row" style="margin-top:var(--sp-4)">
@@ -166,9 +220,8 @@ export const ui = {
           <button class="btn btn--primary grow" id="ok">${this.esc(textoOk)}</button>
         </div>
       `, (root) => {
-        root.querySelector('#ok').addEventListener('click', () => { this.cerrarModal(); resolve(true); });
-        document.querySelector('.modal__backdrop').addEventListener('click', () => resolve(false), { once: true });
-      });
+        root.querySelector('#ok').addEventListener('click', () => { valor = true; this.cerrarModal(); });
+      }, () => resolve(valor));
     });
   },
 };
