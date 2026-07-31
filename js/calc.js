@@ -256,6 +256,67 @@ export function saldoCaja(movimientos = []) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Pedidos y clientes                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tolerancia de centavo. Un pedido de $16.600 cobrado en dos veces puede dar
+ * 16.599,999999 por el redondeo binario: sin esto queda "con seña" para
+ * siempre y aparece en las alertas de cobro pendiente todas las semanas.
+ */
+const EPS = 1e-6;
+
+/**
+ * Estado de pago derivado de los cobros. NUNCA se carga a mano: es el reflejo
+ * de la suma de la tabla `cobro` contra el total del pedido (PDR §3).
+ */
+export function estadoPago(total, cobrado = 0) {
+  const t = Number(total) || 0;
+  const c = Number(cobrado) || 0;
+  if (c + EPS >= t) return 'pagado';
+  if (c <= 0) return 'impago';
+  return 'sena';
+}
+
+/** Segmento por cantidad de pedidos. PDR §3 — campos derivados de `cliente`. */
+export function segmentoCliente(cantidadPedidos = 0) {
+  if (cantidadPedidos >= 5) return 'fiel';
+  if (cantidadPedidos >= 2) return 'frecuente';
+  return 'nuevo';
+}
+
+/**
+ * Resumen derivado de un cliente a partir de SUS pedidos.
+ *
+ * Los anulados no cuentan para nada: ni al segmento, ni al total, ni al ticket
+ * promedio. Un pedido que se cargó mal y se dio de baja no convierte a nadie en
+ * cliente frecuente.
+ *
+ * `impago` mira solo los entregados: lo que está en camino todavía no se debe.
+ */
+export function resumenCliente(pedidos = []) {
+  const validos = pedidos.filter((p) => p.estado !== 'cancelado');
+  const total = validos.reduce((a, p) => a + (p.total || 0), 0);
+
+  const ultimo = validos.reduce(
+    (a, p) => (p.fecha_pedido && (!a || p.fecha_pedido > a) ? p.fecha_pedido : a), null,
+  );
+
+  const impago = validos
+    .filter((p) => p.estado === 'entregado')
+    .reduce((a, p) => a + Math.max(0, (p.total || 0) - (p.monto_cobrado || 0)), 0);
+
+  return {
+    cantidad: validos.length,
+    total,
+    ticket: validos.length ? total / validos.length : 0,
+    ultimo,
+    impago,
+    segmento: segmentoCliente(validos.length),
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  Rentabilidad por producto                                          */
 /* ------------------------------------------------------------------ */
 

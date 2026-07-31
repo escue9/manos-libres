@@ -24,6 +24,9 @@ const PERMISOS = {
     editarPrecios: true,
     gestionarInsumos: true,
     cargarProduccion: true,
+    gestionarClientes: true,
+    cargarPedidos: true,
+    anularPedidos: true,
     liquidar: true,
     exportar: true,
   },
@@ -36,6 +39,9 @@ const PERMISOS = {
     editarPrecios: false,
     gestionarInsumos: false,    // no compra ni edita insumos ni recetas
     cargarProduccion: true,     // sí carga órdenes, las cierra y cuenta stock
+    gestionarClientes: true,    // toma el pedido y carga al cliente en el momento
+    cargarPedidos: true,        // vende, entrega y cobra: es su trabajo
+    anularPedidos: false,       // deshacer una venta mueve stock Y caja
     liquidar: false,
     exportar: false,
   },
@@ -48,6 +54,9 @@ const PERMISOS = {
     editarPrecios: false,
     gestionarInsumos: false,
     cargarProduccion: false,    // la comisión mira, no opera
+    gestionarClientes: false,
+    cargarPedidos: false,
+    anularPedidos: false,
     liquidar: false,
     exportar: true,
   },

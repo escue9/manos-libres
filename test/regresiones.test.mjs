@@ -73,7 +73,13 @@ await esperar(120);
 jornadas = await db.from('jornada').select().eq('fecha', lunes);
 t('el segundo tap la borra, no la duplica', jornadas.length === 0);
 
-/* Lo mismo en venta rápida: un tap sumaba dos empanadas después de dos renders */
+/* Lo mismo en venta rápida: un tap sumaba dos empanadas después de dos renders.
+   Desde la Fase 2 el tab Pedidos tiene subnavegación y para un admin abre en la
+   lista de pedidos, así que primero hay que pararse en la venta. */
+await ped.render(vistaVta);
+clic(vistaVta.querySelector('[data-sub="venta"]'));
+await esperar(60);
+
 for (let i = 0; i < 3; i++) await ped.render(vistaVta);
 clic(vistaVta.querySelector('.producto-card'));
 await esperar(30);

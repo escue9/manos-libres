@@ -371,6 +371,30 @@ body.con-login { overflow: hidden; }
 /* Fila de una tabla con faltante de insumo */
 .fila--falta td { color: var(--danger); }
 
+/* Un pedido lleva dos estados a la vez: el del pedido y el del pago */
+.fila__lado--badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+
+/* ---------- Agenda de entregas ---------- */
+
+.agenda__dia { margin-bottom: var(--sp-5); }
+
+.agenda__cabecera {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2);
+  margin-bottom: var(--sp-2); padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.agenda__fecha {
+  font-size: .72rem; font-weight: 800; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+
+.agenda__total { font-family: var(--font-mono); font-size: .8rem; color: var(--text-dim); }
+
+/* El día de hoy es el que se mira: se marca con el color del módulo */
+.agenda__dia--hoy .agenda__cabecera { border-bottom-color: var(--pedidos); }
+.agenda__dia--hoy .agenda__fecha    { color: var(--pedidos); }
+
 /* ---------- Avisos ---------- */
 
 .alerta {

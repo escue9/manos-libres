@@ -18,7 +18,7 @@ Después abrir http://localhost:8000 y probar **siempre en vista mobile**.
 - `CLAUDE.md` — las 8 reglas no negociables. Leer primero
 - `docs/PDR.md` — modelo de datos, flujos, fórmulas, roadmap
 - `docs/BRIEF-CODE.md` — **handoff para seguir el desarrollo**
-- `docs/FASE-0.md` · `docs/VENTA-RAPIDA.md` · `docs/FASE-1.md` · `docs/FASE-3.md` — qué se construyó y por qué
+- `docs/FASE-0.md` · `docs/VENTA-RAPIDA.md` · `docs/FASE-1.md` · `docs/FASE-2.md` · `docs/FASE-3.md` — qué se construyó y por qué
 - `docs/REVISION-FASES-2-3.md` · `docs/REVISION-FASES-0-1.md` — los bugs que encontraron las revisiones profundas y cómo se arreglaron
 - `docs/BRIEF-DESIGN.md` — briefs para diseñar pantallas nuevas
 
@@ -26,16 +26,15 @@ Después abrir http://localhost:8000 y probar **siempre en vista mobile**.
 
 ```bash
 npm install   # una sola vez, solo para testing
-npm test      # 272 pruebas
+npm test      # 362 pruebas
 ```
 
 ## Estado
 
 - ✅ Fase 0 — fundación, login por PIN, permisos por rol
-- ✅ Venta rápida — la pantalla del mostrador
 - ✅ Fase 1 — insumos, compras, recetas, costeo, órdenes de producción, stock
+- ✅ Fase 2 — clientes, pedidos, agenda de entregas, venta rápida, cobros
 - ✅ Fase 3 — trabajadoras, jornadas, liquidación, vista por rol
-- 🟡 Fase 2 — falta clientes, pedidos con entrega y agenda
 - ⏳ Fases 4 y 5 — ver `docs/BRIEF-CODE.md`
 
 ## Backup

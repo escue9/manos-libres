@@ -20,6 +20,7 @@ import { state } from '../state.js';
 import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
+import { demandaPendiente } from './pedidos.js';
 
 const CATEGORIAS_INSUMO = ['Almacén', 'Carnicería', 'Verdulería', 'Lácteos', 'Packaging', 'Otros'];
 
@@ -1233,8 +1234,13 @@ async function pantallaOrdenes(cont) {
   fab(cont, () => modalNuevaOrden(), 'Nueva orden');
 }
 
-function modalNuevaOrden() {
+async function modalNuevaOrden() {
   const productos = state.productos.filter((p) => p.activo);
+
+  // Los pedidos abiertos ya dicen qué hay que cocinar: se precarga lo que falta
+  // para cumplirlos (PDR §4.2, paso 4). Es un número editable, no una orden.
+  const demanda = new Map((await demandaPendiente()).map((d) => [d.producto_id, d]));
+  const hayDemanda = [...demanda.values()].some((d) => d.falta > 0);
 
   ui.abrirModal(`
     <h3>Nueva orden</h3>
@@ -1245,13 +1251,21 @@ function modalNuevaOrden() {
       </div>
       <div>
         <label class="dim" style="font-size:.78rem">Qué se va a producir</label>
+        ${hayDemanda ? '<p class="faint" style="margin:var(--sp-1) 0 0">Viene precargado lo que falta para los pedidos abiertos.</p>' : ''}
         <div class="stack" style="margin-top:var(--sp-2)">
-          ${productos.map((p) => `
+          ${productos.map((p) => {
+            const d = demanda.get(p.id);
+            return `
             <div class="between" data-prod="${p.id}">
-              <span>${ui.esc(p.nombre)}</span>
+              <div style="min-width:0">
+                <div>${ui.esc(p.nombre)}</div>
+                ${d?.falta > 0 ? `<div class="faint">${d.pedido} pedidas · hay ${d.stock}</div>` : ''}
+              </div>
               <input class="input cant-chica" type="number" inputmode="numeric" min="0" placeholder="0"
+                     value="${d?.falta > 0 ? d.falta : ''}"
                      aria-label="Cantidad de ${ui.esc(p.nombre)}">
-            </div>`).join('')}
+            </div>`;
+          }).join('')}
         </div>
       </div>
       <div class="field">

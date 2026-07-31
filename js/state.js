@@ -64,6 +64,7 @@ export const state = {
   productoPorId(id)    { return this.productos.find((p) => p.id === id); },
   insumoPorId(id)      { return this.insumos.find((i) => i.id === id); },
   trabajadoraPorId(id) { return this.trabajadoras.find((t) => t.id === id); },
+  clientePorId(id)     { return this.clientes.find((c) => c.id === id); },
 
   /** Map insumo_id → insumo, para calc.costoProducto() */
   get insumosMap() { return new Map(this.insumos.map((i) => [i.id, i])); },
