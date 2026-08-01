@@ -11,10 +11,10 @@
 
 export const CONFIG = {
   /** https://<ref>.supabase.co */
-  SUPABASE_URL: 'https://dcgbqhedpgutpsagmasy.supabase.co',
+  SUPABASE_URL: 'https://xkvkzuivyqunduavejla.supabase.co',
 
   /** La anon / publishable key del proyecto. */
-  SUPABASE_ANON_KEY: 'sb_publishable_DOr40J0Vnpw81LSQ4Vlmvg_yv1O9gp_',
+  SUPABASE_ANON_KEY: 'sb_publishable_sVfuvpEY5bI469kaLact7g_iwEjYX5S',
 
   /**
    * WhatsApp de la cocina, en formato internacional y solo dígitos.
