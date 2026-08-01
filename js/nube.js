@@ -290,4 +290,73 @@ export async function sincronizarPrecios(productos = []) {
   return cambios;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Buzón de pedidos                                                   */
+/* ------------------------------------------------------------------ */
+
+const CAMPOS_PEDIDO = 'id,creado_at,nombre,telefono,modo_entrega,direccion,'
+  + 'fecha_deseada,notas,items,total,estado,pedido_id,procesado_at';
+
+/** Lo que está esperando que alguien lo mire. Más viejo primero. */
+export async function bandeja() {
+  auth.exigir('gestionarCanalWeb');
+  return (await pedir(`pedido_web?select=${CAMPOS_PEDIDO}&estado=eq.nuevo&order=creado_at.asc`)) || [];
+}
+
+/** Cuántos hay sin revisar, para el badge. Barato: no baja los pedidos. */
+export async function cuantosNuevos() {
+  if (!auth.puede('gestionarCanalWeb')) return 0;
+  const est = await estado();
+  if (!est.conectado) return 0;
+
+  try {
+    return (await pedir('pedido_web?select=id&estado=eq.nuevo') || []).length;
+  } catch {
+    // Sin señal el badge no aparece, pero la pantalla de pedidos abre igual.
+    return 0;
+  }
+}
+
+/**
+ * Marca el pedido del buzón como importado.
+ *
+ * El filtro incluye `estado=eq.nuevo` a propósito: si otra persona lo importó
+ * mientras esta lo revisaba, el update no toca ninguna fila y devolvemos false
+ * en vez de pisar el pedido que ya se creó. El buzón es compartido y la cocina
+ * tiene más de un dispositivo.
+ */
+export async function marcarImportado(pedidoWebId, pedidoId) {
+  auth.exigir('gestionarCanalWeb');
+  if (!pedidoId) throw new Error('Falta el pedido del SO al que se importó');
+
+  const filas = await pedir(
+    `pedido_web?id=eq.${encodeURIComponent(pedidoWebId)}&estado=eq.nuevo`,
+    {
+      metodo: 'PATCH',
+      cuerpo: { estado: 'importado', pedido_id: pedidoId, procesado_at: new Date().toISOString() },
+      prefer: 'return=representation',
+    },
+  );
+  return Array.isArray(filas) && filas.length > 0;
+}
+
+/** Descartar no borra: si mañana el cliente reclama, el pedido tiene que estar. */
+export async function marcarDescartado(pedidoWebId, motivo = '') {
+  auth.exigir('gestionarCanalWeb');
+
+  const filas = await pedir(
+    `pedido_web?id=eq.${encodeURIComponent(pedidoWebId)}&estado=eq.nuevo`,
+    {
+      metodo: 'PATCH',
+      cuerpo: {
+        estado: 'descartado',
+        procesado_at: new Date().toISOString(),
+        motivo_descarte: String(motivo || '').trim() || null,
+      },
+      prefer: 'return=representation',
+    },
+  );
+  return Array.isArray(filas) && filas.length > 0;
+}
+
 export const _paraTests = { CLAVES, olvidar };

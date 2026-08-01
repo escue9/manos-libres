@@ -28,6 +28,7 @@ import { state } from '../state.js';
 import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
+import * as nube from '../nube.js';
 import * as canalWeb from './canal-web.js';
 
 /** Tolerancia de centavo para comparar plata. Misma razón que en calc.js. */
@@ -207,12 +208,14 @@ async function lineasConSnapshot(items = []) {
     const producto = productos.find((p) => p.id === it.producto_id);
     if (!producto) throw new Error('Hay una línea sin producto');
 
-    lineas.push({
-      producto,
-      cantidad,
-      precio: producto.precio_venta || 0,
-      costo: calc.costoEfectivo(producto),
-    });
+    // `precio` explícito solo lo usa la importación del buzón, donde la
+    // administración puede decidir respetar el precio con el que el cliente
+    // vio el catálogo aunque el del SO ya haya cambiado. En el resto de los
+    // casos manda el precio del producto.
+    const precio = it.precio != null ? Number(it.precio) : (producto.precio_venta || 0);
+    if (!(precio >= 0)) throw new Error(`Precio inválido para ${producto.nombre}`);
+
+    lineas.push({ producto, cantidad, precio, costo: calc.costoEfectivo(producto) });
   }
 
   return lineas;
@@ -302,6 +305,148 @@ export async function crearPedido({
   })));
 
   return { pedido, faltantes };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Buzón del catálogo web                                             */
+/* ------------------------------------------------------------------ */
+
+/** ¿Este pedido del buzón ya entró al SO? */
+export async function yaImportado(pedidoWebId) {
+  const previos = await db.from('pedido').select().eq('origen_web_id', pedidoWebId);
+  return previos[0] || null;
+}
+
+/**
+ * Convierte un pedido del buzón en un pedido del SO.
+ *
+ * El orden importa. Primero se crea el pedido local y recién después se marca
+ * el buzón; si se hiciera al revés y la escritura local fallara, el buzón
+ * diría "importado" sin que exista el pedido y nadie lo cocinaría. Como el
+ * buzón es compartido y la cocina tiene más de un dispositivo, la marca es un
+ * compare-and-set sobre `estado = 'nuevo'`: si otra persona lo tomó mientras
+ * esta lo revisaba, se deshace el pedido local en vez de duplicarlo.
+ *
+ * NO toca el stock. El stock se descuenta al ENTREGAR: un pedido para el
+ * viernes no puede bajar el stock del lunes, porque la venta rápida del martes
+ * creería que no hay mercadería.
+ *
+ * @param {Object} pedidoWeb            la fila de pedido_web
+ * @param {Object} o
+ * @param {string} [o.clienteId]        cliente ya existente
+ * @param {Object} [o.cliente]          datos para crearlo en el momento
+ * @param {Array}  o.items              [{producto_id, cantidad, precio}] ya mapeados
+ *                                      y con el precio que confirmó la administración
+ * @param {string} [o.fechaEntrega]
+ */
+export async function importarPedidoWeb(pedidoWeb, {
+  clienteId = null, cliente = null, items = [], fechaEntrega = null,
+} = {}) {
+  auth.exigir('gestionarCanalWeb');
+
+  if (!pedidoWeb?.id) throw new Error('Falta el pedido del buzón');
+  if (pedidoWeb.estado && pedidoWeb.estado !== 'nuevo') {
+    throw new Error(`Este pedido ya está ${pedidoWeb.estado}`);
+  }
+
+  const previo = await yaImportado(pedidoWeb.id);
+  if (previo) throw new Error('Este pedido del buzón ya se importó');
+
+  if (!clienteId && !cliente) {
+    const porTel = await buscarPorTelefono(pedidoWeb.telefono);
+    if (porTel) clienteId = porTel.id;
+    else cliente = { nombre: pedidoWeb.nombre, telefono: pedidoWeb.telefono };
+  }
+
+  const { pedido, faltantes } = await crearPedido({
+    clienteId,
+    cliente,
+    canal: 'catalogo_web',
+    modoEntrega: pedidoWeb.modo_entrega,
+    direccionEntrega: pedidoWeb.direccion || '',
+    origenWebId: pedidoWeb.id,
+    fechaEntrega: esFechaISO(fechaEntrega) ? fechaEntrega
+      : (esFechaISO(pedidoWeb.fecha_deseada) ? pedidoWeb.fecha_deseada : hoyISO()),
+    notas: pedidoWeb.notas || '',
+    items,
+    estado: 'confirmado',
+  });
+
+  let tomado = false;
+  try {
+    tomado = await nube.marcarImportado(pedidoWeb.id, pedido.id);
+  } catch (err) {
+    await deshacerImportacion(pedido.id);
+    throw new Error(`No se pudo marcar el pedido en el buzón: ${err.message}`);
+  }
+
+  if (!tomado) {
+    await deshacerImportacion(pedido.id);
+    throw new Error('Alguien más ya tomó este pedido del buzón');
+  }
+
+  return { pedido, faltantes };
+}
+
+/**
+ * Borra un pedido recién creado que no llegó a cerrar la importación.
+ *
+ * Se puede borrar sin más porque todavía no movió nada: importar no toca
+ * stock ni caja. Anular sería para un pedido que sí vivió.
+ */
+async function deshacerImportacion(pedidoId) {
+  await db.from('pedido_item').delete().eq('pedido_id', pedidoId);
+  await db.from('pedido').delete().eq('id', pedidoId);
+}
+
+/** Descarta un pedido del buzón. No borra: queda con su motivo. */
+export async function descartarPedidoWeb(pedidoWebId, motivo) {
+  auth.exigir('gestionarCanalWeb');
+
+  const texto = String(motivo || '').trim();
+  if (!texto) throw new Error('Descartar un pedido pide un motivo');
+
+  const hecho = await nube.marcarDescartado(pedidoWebId, texto);
+  if (!hecho) throw new Error('Ese pedido ya no estaba sin revisar');
+  return true;
+}
+
+/**
+ * Compara lo que pidió el cliente contra el SO de hoy: qué producto es cada
+ * ítem, a cuánto está ahora y cuánto stock hay. Es lo que pinta la pantalla
+ * de revisión — no escribe nada.
+ */
+export async function revisarPedidoWeb(pedidoWeb) {
+  auth.exigir('gestionarCanalWeb');
+
+  const productos = await db.from('producto').select();
+  const lineas = (pedidoWeb.items || []).map((it) => {
+    const producto = productos.find((p) => p.id === it.producto_id) || null;
+    const precioWeb = Number(it.precio) || 0;
+    const precioSO = producto ? (producto.precio_venta || 0) : null;
+
+    return {
+      nombre: it.nombre,
+      cantidad: Number(it.cantidad) || 0,
+      producto,
+      precioWeb,
+      precioSO,
+      // Si el precio cambió desde que se publicó el catálogo, la pantalla
+      // muestra las dos cifras y decide la administración.
+      cambio: producto != null && Math.abs(precioSO - precioWeb) > EPS,
+      stock: producto ? (producto.stock_actual || 0) : 0,
+    };
+  });
+
+  const cliente = await buscarPorTelefono(pedidoWeb.telefono);
+
+  return {
+    lineas,
+    cliente,
+    sinMapear: lineas.filter((l) => !l.producto).length,
+    totalWeb: lineas.reduce((a, l) => a + l.precioWeb * l.cantidad, 0),
+    totalSO: lineas.reduce((a, l) => a + (l.precioSO ?? l.precioWeb) * l.cantidad, 0),
+  };
 }
 
 /**

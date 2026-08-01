@@ -26,7 +26,7 @@ Después abrir http://localhost:8000 y probar **siempre en vista mobile**.
 
 ```bash
 npm install   # una sola vez, solo para testing
-npm test      # 440 pruebas
+npm test      # 476 pruebas
 ```
 
 ## Estado

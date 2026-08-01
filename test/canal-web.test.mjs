@@ -278,6 +278,170 @@ t('la venta rápida entra por el mostrador del CIC', pedidoVenta.canal === 'most
 t('y se entrega en el acto', pedidoVenta.modo_entrega === 'en_el_acto');
 
 /* ================================================================== */
+console.log('\n── importar del buzón');
+
+/** El buzón de mentira: el PATCH solo pega si la fila sigue en 'nuevo'. */
+const buzon = new Map();
+const stubBuzon = () => {
+  globalThis.fetch = async (url, opciones = {}) => {
+    const u = String(url);
+    const cuerpo = opciones.body ? JSON.parse(opciones.body) : null;
+
+    if (u.includes('/auth/v1/token')) {
+      return new Response(JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_in: 3600 }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    if (u.includes('/rest/v1/pedido_web')) {
+      const id = u.match(/id=eq\.([^&]+)/)?.[1];
+      if ((opciones.method || 'GET') === 'GET') {
+        return new Response(JSON.stringify([...buzon.values()].filter((p) => p.estado === 'nuevo')),
+          { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // compare-and-set: el filtro pide estado=eq.nuevo
+      const fila = buzon.get(id);
+      const exige = u.includes('estado=eq.nuevo');
+      if (!fila || (exige && fila.estado !== 'nuevo')) {
+        return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      Object.assign(fila, cuerpo);
+      return new Response(JSON.stringify([fila]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+};
+
+stubBuzon();
+await nube.conectar(CREDENCIALES);
+
+const empanadaId = state.productos.find((p) => p.nombre === 'Empanada de carne').id;
+const nuevoWeb = (id, extra = {}) => {
+  buzon.set(id, {
+    id, estado: 'nuevo', nombre: 'Marta', telefono: '2494557788',
+    modo_entrega: 'retira_cic', direccion: null, fecha_deseada: null, notas: '',
+    items: [{ catalogo_item_id: 'c1', producto_id: empanadaId, nombre: 'Empanada de carne', cantidad: 6, precio: 800 }],
+    total: 4800, pedido_id: null, procesado_at: null, ...extra,
+  });
+  return buzon.get(id);
+};
+
+const stockAntes = (await db.from('producto').select().eq('id', empanadaId).single()).stock_actual;
+const cajaAntes = (await db.from('movimiento_caja').select()).length;
+const movStockAntes = (await db.from('movimiento_stock_producto').select()).length;
+
+const w1 = nuevoWeb('web-a');
+const { pedido: importado } = await ped.importarPedidoWeb(w1, {
+  items: [{ producto_id: empanadaId, cantidad: 6, precio: 800 }],
+});
+
+t('el pedido entra como confirmado', importado.estado === 'confirmado');
+t('con el canal del catálogo web', importado.canal === 'catalogo_web');
+t('y guardando de qué pedido del buzón vino', importado.origen_web_id === 'web-a');
+t('el buzón queda marcado como importado', buzon.get('web-a').estado === 'importado');
+t('apuntando al pedido del SO', buzon.get('web-a').pedido_id === importado.id);
+t('con la fecha en que se procesó', !!buzon.get('web-a').procesado_at);
+
+// Lo más importante de todo: aceptar NO es entregar.
+const stockDespues = (await db.from('producto').select().eq('id', empanadaId).single()).stock_actual;
+t('aceptar NO mueve el stock', stockDespues === stockAntes);
+t('ni deja movimiento de stock', (await db.from('movimiento_stock_producto').select()).length === movStockAntes);
+t('ni mueve la caja', (await db.from('movimiento_caja').select()).length === cajaAntes);
+
+t('el cliente nuevo se creó a partir del teléfono del pedido',
+  (await ped.buscarPorTelefono('2494557788'))?.nombre === 'Marta');
+
+err = await tira(() => ped.importarPedidoWeb(w1, {
+  items: [{ producto_id: empanadaId, cantidad: 6, precio: 800 }],
+}));
+t('importar dos veces el mismo pedido no crea dos pedidos', !!err);
+t('y lo dice claro', /ya se importó|ya está importado/i.test(err.message));
+t('sigue habiendo un solo pedido de ese origen',
+  (await db.from('pedido').select().eq('origen_web_id', 'web-a')).length === 1);
+
+/* --- descartado --- */
+
+nuevoWeb('web-b');
+await ped.descartarPedidoWeb('web-b', 'Pedido de prueba de alguien');
+t('descartar deja el motivo', buzon.get('web-b').motivo_descarte === 'Pedido de prueba de alguien');
+t('el pedido descartado NO se borra del buzón', buzon.has('web-b'));
+
+err = await tira(() => ped.importarPedidoWeb(buzon.get('web-b'), {
+  items: [{ producto_id: empanadaId, cantidad: 1, precio: 800 }],
+}));
+t('un pedido descartado no se puede importar después', !!err);
+
+err = await tira(() => ped.descartarPedidoWeb('web-b', 'otra vez'));
+t('ni descartar dos veces', !!err);
+
+err = await tira(() => ped.descartarPedidoWeb('web-c', ''));
+t('descartar sin motivo no se permite', /motivo/i.test(err.message));
+
+/* --- carrera entre dos dispositivos --- */
+
+const w3 = nuevoWeb('web-d');
+buzon.get('web-d').estado = 'importado';   // otra tablet lo tomó recién
+buzon.get('web-d').pedido_id = 'otro-pedido';
+
+const pedidosAntes = (await db.from('pedido').select()).length;
+err = await tira(() => ped.importarPedidoWeb({ ...w3, estado: 'nuevo' }, {
+  items: [{ producto_id: empanadaId, cantidad: 6, precio: 800 }],
+}));
+t('si otro dispositivo lo tomó primero, la importación falla', !!err);
+t('y no queda un pedido colgado en el SO',
+  (await db.from('pedido').select()).length === pedidosAntes);
+
+/* --- precio viejo --- */
+
+nuevoWeb('web-e', {
+  items: [{ producto_id: empanadaId, nombre: 'Empanada de carne', cantidad: 3, precio: 600 }],
+  total: 1800,
+});
+
+const revision = await ped.revisarPedidoWeb(buzon.get('web-e'));
+t('la revisión detecta que el precio cambió', revision.lineas[0].cambio === true);
+t('muestra el precio con el que pidió el cliente', revision.lineas[0].precioWeb === 600);
+t('y el precio de hoy del SO', revision.lineas[0].precioSO === 800);
+t('informa el stock disponible', revision.lineas[0].stock > 0);
+t('reconoce al cliente por el teléfono', revision.cliente?.nombre === 'Marta');
+
+// La administración decide respetar el precio publicado.
+const { pedido: conPrecioViejo } = await ped.importarPedidoWeb(buzon.get('web-e'), {
+  items: [{ producto_id: empanadaId, cantidad: 3, precio: 600 }],
+});
+const itemsViejo = await db.from('pedido_item').select().eq('pedido_id', conPrecioViejo.id);
+t('se importa con el precio que confirmó la administración', itemsViejo[0].precio_unitario === 600);
+t('y ese precio queda congelado en el pedido (regla 4)', conPrecioViejo.total === 1800);
+
+/* --- entregar sí mueve las dos cosas, y una sola vez --- */
+
+const stockPrevio = (await db.from('producto').select().eq('id', empanadaId).single()).stock_actual;
+await ped.entregarPedido(importado.id);
+const stockPostEntrega = (await db.from('producto').select().eq('id', empanadaId).single()).stock_actual;
+
+t('entregar SÍ descuenta el stock', stockPostEntrega === stockPrevio - 6);
+t('y deja el movimiento de stock',
+  (await db.from('movimiento_stock_producto').select()).length > movStockAntes);
+
+err = await tira(() => ped.entregarPedido(importado.id));
+t('entregar dos veces no descuenta dos veces', !!err);
+t('el stock quedó igual que después de la primera entrega',
+  (await db.from('producto').select().eq('id', empanadaId).single()).stock_actual === stockPostEntrega);
+
+/* --- permisos --- */
+
+auth.rol = 'trabajadora';
+nuevoWeb('web-f');
+t('una trabajadora no puede ver el buzón', !!(await tira(() => nube.bandeja())));
+t('no puede importar del buzón', !!(await tira(() => ped.importarPedidoWeb(buzon.get('web-f'), {
+  items: [{ producto_id: empanadaId, cantidad: 1, precio: 800 }],
+}))));
+t('no puede descartar', !!(await tira(() => ped.descartarPedidoWeb('web-f', 'no'))));
+t('ni revisar lo que llegó', !!(await tira(() => ped.revisarPedidoWeb(buzon.get('web-f')))));
+t('y el pedido sigue esperando en el buzón', buzon.get('web-f').estado === 'nuevo');
+auth.rol = 'admin';
+
+/* ================================================================== */
 console.log('\n── QR del catálogo');
 
 const qr = await import('../js/qr.js');
