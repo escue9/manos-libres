@@ -400,6 +400,16 @@ body.con-login { overflow: hidden; }
   background: var(--surface-2); color: var(--text-dim); font-size: .72rem;
 }
 
+/* El día de la agenda va partido: preparar bolsas y salir a repartir son dos
+   trabajos distintos, y quien reparte necesita las direcciones juntas */
+.agenda__bloque + .agenda__bloque { margin-top: var(--sp-3); }
+
+.agenda__bloque-titulo {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  font-size: .72rem; font-weight: 800; color: var(--text-dim);
+}
+
 /* ---------- Agenda de entregas ---------- */
 
 .agenda__dia { margin-bottom: var(--sp-5); }

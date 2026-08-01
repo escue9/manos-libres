@@ -2039,15 +2039,22 @@ async function pantallaAgenda(cont, vista) {
       const delDia = agenda.filter((p) => p.fecha_entrega === fecha);
       if (!delDia.length) return '';
       const total = delDia.reduce((a, p) => a + (p.total || 0), 0);
+
+      // El día se parte en dos porque son dos trabajos distintos: preparar las
+      // bolsas que vienen a buscar, y armar el recorrido de reparto. Quien
+      // sale a repartir necesita las direcciones juntas, no salteadas entre
+      // los retiros.
+      const reparto = delDia.filter((p) => p.modo_entrega === 'domicilio');
+      const retiran = delDia.filter((p) => p.modo_entrega !== 'domicilio');
+
       return `
         <div class="agenda__dia ${fecha === hoy ? 'agenda__dia--hoy' : ''}">
           <div class="agenda__cabecera">
             <span class="agenda__fecha">${NOMBRE_DIA[i]} ${ui.fecha(fecha)}${fecha === hoy ? ' · hoy' : ''}</span>
             <span class="agenda__total">${delDia.length} · ${ui.money(total)}</span>
           </div>
-          <div class="lista">
-            ${delDia.map((p) => filaPedido(p, cantidad.get(p.id) || 0)).join('')}
-          </div>
+          ${bloqueEntrega('Retiran en el CIC', retiran, cantidad)}
+          ${bloqueEntrega('Reparto a domicilio', reparto, cantidad)}
         </div>`;
     }).join('')}`;
 
@@ -2064,6 +2071,24 @@ async function pantallaAgenda(cont, vista) {
     el.addEventListener('click', () => modalPedido(el.dataset.pedido, vista)));
 
   if (puedeCargar()) fab(cont, () => modalPedido(null, vista), 'Nuevo pedido');
+}
+
+/**
+ * Un bloque del día. Solo se pinta si tiene algo: un día de puros retiros no
+ * tiene por qué mostrar un "Reparto a domicilio" vacío.
+ */
+function bloqueEntrega(titulo, pedidos, cantidad) {
+  if (!pedidos.length) return '';
+  return `
+    <div class="agenda__bloque">
+      <div class="agenda__bloque-titulo">
+        ${titulo}
+        <span class="grupo__cuenta num">${pedidos.length}</span>
+      </div>
+      <div class="lista">
+        ${pedidos.map((p) => filaPedido(p, cantidad.get(p.id) || 0)).join('')}
+      </div>
+    </div>`;
 }
 
 /* ------------------------------------------------------------------ */
