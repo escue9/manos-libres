@@ -8,7 +8,7 @@
  * Subí CACHE_VERSION en cada deploy o los usuarios quedan con la versión vieja.
  */
 
-const CACHE_VERSION = 'cocina-cic-v4';
+const CACHE_VERSION = 'cocina-cic-v5';
 
 const SHELL = [
   './',
@@ -23,8 +23,11 @@ const SHELL = [
   './js/calc.js',
   './js/auth.js',
   './js/ui.js',
+  './js/nube.js',
+  './js/qr.js',
   './js/modules/produccion.js',
   './js/modules/pedidos.js',
+  './js/modules/canal-web.js',
   './js/modules/trabajadoras.js',
   './js/modules/caja.js',
   './assets/logo.png',

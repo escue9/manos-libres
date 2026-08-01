@@ -85,8 +85,15 @@ Hereda la marca de Manos Libres (ver `.claude/skills/manos-libres-design/SKILL.m
 ├── css/
 │   ├── base.css           variables, tipografías, reset
 │   └── components.css     tablas, modales, cards, botones
+├── catalogo/              el link público — NO comparte código con el SO
+│   ├── index.html         la página que abre el cliente
+│   ├── app.js             carrito y envío al buzón
+│   └── config.js          URL y anon key de Supabase
+├── supabase/migrations/   esquema del canal web
 └── js/
     ├── db.js              capa de datos — API igual a Supabase
+    ├── nube.js            canal web: catálogo y buzón en Supabase
+    ├── qr.js              generador de QR, sin dependencias
     ├── state.js           estado en memoria + eventos
     ├── calc.js            costeo, márgenes, cierre semanal
     ├── auth.js            roles y permisos
@@ -94,9 +101,16 @@ Hereda la marca de Manos Libres (ver `.claude/skills/manos-libres-design/SKILL.m
     └── modules/
         ├── produccion.js  insumos, recetas, órdenes, stock
         ├── pedidos.js     clientes, pedidos, entregas, cobros
+        ├── canal-web.js   pantalla del catálogo online
         ├── trabajadoras.js jornadas y liquidación
         └── caja.js        movimientos, cierre, rentabilidad
 ```
+
+**`db.js` y `nube.js` no son lo mismo.** `db.js` es la capa de datos del SO y en
+la fase 5 se le cambia el motor por Supabase. `nube.js` son las dos tablas del
+canal web, que están en la nube desde ahora porque un cliente que abre el
+catálogo desde su celular no puede escribir en el IndexedDB de la cocina.
+Producción, stock, jornadas y caja siguen locales.
 
 ---
 
@@ -130,7 +144,7 @@ Cada fase deja el sistema usable. No arranques una fase sin cerrar la anterior.
 - Probar siempre en vista mobile del navegador, no en desktop
 - Antes de dar una fase por terminada, revisá el checklist de §8 del PDR
 - Los datos de prueba se cargan desde `js/db.js` → `seed()`
-- Correr `npm test` antes de cerrar cualquier fase — son las siete suites juntas.
+- Correr `npm test` antes de cerrar cualquier fase — son las ocho suites juntas.
   Si tocaste `db.js`, `auth.js` o `calc.js`, agregá el caso que cubra el cambio.
 - Para empezar de cero: en la consola `await db.reset()` y recargar. Ojo que eso
   también borra el PIN de administración.

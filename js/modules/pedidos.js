@@ -28,6 +28,7 @@ import { state } from '../state.js';
 import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
+import * as canalWeb from './canal-web.js';
 
 /** Tolerancia de centavo para comparar plata. Misma razón que en calc.js. */
 const EPS = 1e-6;
@@ -793,7 +794,12 @@ const SUBVISTAS = [
   { id: 'pedidos', etiqueta: 'Pedidos' },
   { id: 'agenda',  etiqueta: 'Agenda' },
   { id: 'venta',   etiqueta: 'Venta rápida' },
+  { id: 'canal',   etiqueta: 'Catálogo online', permiso: 'gestionarCanalWeb' },
 ];
+
+/** Las subvistas que el rol actual puede ver. */
+const subvistasVisibles = () =>
+  SUBVISTAS.filter((s) => !s.permiso || auth.puede(s.permiso));
 
 /** Se recuerdan entre renders: volver de un modal no te saca de donde estabas. */
 let subvista = null;
@@ -808,6 +814,11 @@ export async function render(vista) {
   // administración, la lista de pedidos.
   subvista ||= verCostos() ? 'pedidos' : 'venta';
 
+  // Si el rol cambió y la subvista recordada ya no le corresponde, se vuelve a
+  // la primera permitida en vez de renderizar una pantalla prohibida.
+  const visibles = subvistasVisibles();
+  if (!visibles.some((s) => s.id === subvista)) subvista = visibles[0].id;
+
   // La barra fija de la venta rápida solo existe mientras esa pantalla está
   // en primer plano: si queda puesta, tapa el final de las otras dos.
   const enVenta = subvista === 'venta';
@@ -820,7 +831,7 @@ export async function render(vista) {
         <h1 style="margin:0">Pedidos</h1>
       </div>`}
     <div class="subnav" id="subnav">
-      ${SUBVISTAS.map((s) => `
+      ${visibles.map((s) => `
         <button data-sub="${s.id}" class="${s.id === subvista ? 'active' : ''}">${s.etiqueta}</button>
       `).join('')}
     </div>
@@ -836,6 +847,7 @@ export async function render(vista) {
   const cont = vista.querySelector('#sub');
   if (subvista === 'pedidos') return pantallaPedidos(cont, vista);
   if (subvista === 'agenda')  return pantallaAgenda(cont, vista);
+  if (subvista === 'canal')   return canalWeb.pantalla(cont);
   return pantallaVenta(cont, vista);
 }
 

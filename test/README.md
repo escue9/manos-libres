@@ -6,7 +6,7 @@ Pruebas de la capa de datos, permisos y cálculos. No tocan el DOM.
 
 ```bash
 npm install      # fake-indexeddb y jsdom, solo para testing
-npm test         # las siete suites
+npm test         # las ocho suites
 ```
 
 O de a una: `node test/fase-0.test.mjs` · `venta-rapida.test.mjs` ·

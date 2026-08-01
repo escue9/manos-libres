@@ -220,5 +220,70 @@ t('una operación sin sesión avisa en vez de romper',
   /no está conectado/.test((await tira(() => nube.listarCatalogo())).message));
 
 /* ================================================================== */
+console.log('\n── QR del catálogo');
+
+const qr = await import('../js/qr.js');
+
+// Vector del estándar ISO/IEC 18004: los codewords de datos de "01234567" en
+// versión 1-M y su corrección. Si la aritmética en GF(256) o el polinomio
+// generador estuvieran mal, esto no da.
+t('la corrección Reed-Solomon reproduce el ejemplo de la norma',
+  JSON.stringify(qr.correccion(
+    [0x10,0x20,0x0C,0x56,0x61,0x80,0xEC,0x11,0xEC,0x11,0xEC,0x11,0xEC,0x11,0xEC,0x11], 10,
+  )) === JSON.stringify([0xA5,0x24,0xD4,0xC1,0xED,0x36,0xC7,0x87,0x2C,0x55]));
+
+// Las cadenas de formato publicadas para nivel M, máscaras 0 a 7.
+const FORMATOS_M = [
+  '101010000010010', '101000100100101', '101111001111100', '101101101001011',
+  '100010111111001', '100000011001110', '100111110010111', '100101010100000',
+];
+t('las 15 cadenas de información de formato son las de la tabla',
+  FORMATOS_M.every((esperado, mascara) =>
+    qr._paraTests.formato(mascara).toString(2).padStart(15, '0') === esperado));
+
+t('la información de versión de la v7 es la de la tabla',
+  qr._paraTests.infoVersion(7) === 0b000111110010010100);
+
+t('elige la versión más chica donde entra',
+  qr._paraTests.versionPara(new Array(14).fill(65)) === 1
+  && qr._paraTests.versionPara(new Array(15).fill(65)) === 2);
+
+let err2 = null;
+try { qr.matriz('x'.repeat(300)); } catch (e) { err2 = e; }
+t('un texto que no entra avisa en vez de generar un QR roto', !!err2);
+
+const enlace = 'https://manos-libres.vercel.app/catalogo/';
+const mqr = qr.matriz(enlace);
+const n = mqr.length;
+
+t('el lado corresponde a la versión', (n - 17) % 4 === 0 && n === 29);
+t('los tres patrones de búsqueda están',
+  mqr[0].slice(0, 7).every(Boolean)
+  && mqr[0].slice(n - 7).every(Boolean)
+  && mqr[n - 1].slice(0, 7).every(Boolean));
+t('el patrón de sincronismo alterna',
+  mqr[6].slice(8, n - 8).every((v, i) => v === (i % 2 === 0)));
+
+// Este se me pasó la primera vez: la información de formato pisaba el módulo
+// oscuro porque la segunda copia se parte 7 + 8, no 8 + 7.
+t('el módulo oscuro queda encendido', mqr[n - 8][8] === true);
+
+const bit = (f, c) => (mqr[f][c] ? '1' : '0');
+const copia1 = [...Array(6).keys()].map((i) => bit(8, i))
+  .concat([bit(8, 7), bit(8, 8), bit(7, 8)])
+  .concat([...Array(6).keys()].map((i) => bit(5 - i, 8))).join('');
+const copia2 = [...Array(7).keys()].map((i) => bit(n - 1 - i, 8))
+  .concat([...Array(8).keys()].map((i) => bit(8, n - 8 + i))).join('');
+t('las dos copias del formato dicen lo mismo', copia1 === copia2);
+
+const densidad = mqr.flat().filter(Boolean).length * 100 / (n * n);
+t('la densidad de módulos oscuros es sana', densidad > 40 && densidad < 60);
+
+const svg = qr.svg(enlace);
+t('el SVG sale bien formado', svg.startsWith('<svg') && svg.endsWith('</svg>'));
+t('incluye la zona quieta de 4 módulos', svg.includes(`viewBox="0 0 ${n + 8} ${n + 8}"`));
+t('dibuja todo en un solo path', (svg.match(/<path/g) || []).length === 1);
+
+/* ================================================================== */
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
 process.exit(mal ? 1 : 0);
