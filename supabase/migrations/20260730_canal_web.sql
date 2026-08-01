@@ -52,6 +52,9 @@ create unique index if not exists catalogo_item_producto_idx
 create or replace function public.tocar_updated_at()
 returns trigger
 language plpgsql
+-- search_path vacío a propósito: una función sin él puede ser secuestrada
+-- creando un objeto con el mismo nombre en un esquema que venga antes.
+set search_path = ''
 as $$
 begin
   new.updated_at = now();

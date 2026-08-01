@@ -27,6 +27,7 @@ const PERMISOS = {
     gestionarClientes: true,
     cargarPedidos: true,
     anularPedidos: true,
+    gestionarCanalWeb: true,
     liquidar: true,
     exportar: true,
   },
@@ -42,6 +43,7 @@ const PERMISOS = {
     gestionarClientes: true,    // toma el pedido y carga al cliente en el momento
     cargarPedidos: true,        // vende, entrega y cobra: es su trabajo
     anularPedidos: false,       // deshacer una venta mueve stock Y caja
+    gestionarCanalWeb: false,   // publicar precios al público es de administración
     liquidar: false,
     exportar: false,
   },
@@ -57,6 +59,7 @@ const PERMISOS = {
     gestionarClientes: false,
     cargarPedidos: false,
     anularPedidos: false,
+    gestionarCanalWeb: false,
     liquidar: false,
     exportar: true,
   },
