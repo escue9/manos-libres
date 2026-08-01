@@ -984,7 +984,7 @@ async function totalVendidoHoy() {
 /* ================================================================== */
 
 const SUBVISTAS = [
-  { id: 'pedidos', etiqueta: 'Pedidos' },
+  { id: 'pedidos', etiqueta: 'Pendientes' },
   { id: 'agenda',  etiqueta: 'Agenda' },
   { id: 'venta',   etiqueta: 'Venta rápida' },
   { id: 'canal',   etiqueta: 'Catálogo online', permiso: 'gestionarCanalWeb' },
@@ -1092,7 +1092,17 @@ const FILTROS = [
   { id: 'todos',     etiqueta: 'Todos' },
 ];
 
+/**
+ * Cada render se lleva un número. El buzón viaja por red y puede tardar, así
+ * que dos renders encimados terminan en cualquier orden: sin esto, el que
+ * arrancó primero llegaba último y volvía a pintar el contador viejo del
+ * buzón, mostrando pedidos para revisar que ya se habían revisado.
+ */
+let renderPedidos = 0;
+
 async function pantallaPedidos(cont, vista) {
+  const mio = ++renderPedidos;
+
   const [todos, items] = await Promise.all([
     db.from('pedido').select().order('fecha_entrega', { ascending: false }),
     db.from('pedido_item').select(),
@@ -1103,7 +1113,19 @@ async function pantallaPedidos(cont, vista) {
   // que hacer con ellas acá. Se ven en Caja y en el cierre.
   const encargados = todos.filter((p) => !esVentaRapida(p));
 
-  if (!encargados.length) {
+  // Lo que está esperando se agrupa por estado: la pregunta de la mañana no es
+  // "qué pedidos hay" sino "qué tengo que cocinar y qué tengo que entregar".
+  // Con los otros filtros se mira el historial, y ahí una lista plana alcanza.
+  const agrupado = filtroPedidos === 'abiertos';
+
+  // El buzón se consulta ANTES del estado vacío. Si no, el primer día del
+  // canal web —sin ningún pedido local todavía y con pedidos esperando en la
+  // nube— la pantalla decía "sin pedidos" y no había forma de llegar a ellos.
+  const buzon = agrupado ? await bandejaSegura() : [];
+
+  if (mio !== renderPedidos) return;   // llegó tarde: ya hay un render más nuevo
+
+  if (!encargados.length && !buzon.length) {
     cont.innerHTML = ui.vacio({
       modulo: 'pedidos', icono: '\u{1F4CB}', titulo: 'Sin pedidos cargados',
       texto: 'Acá entran los encargues por WhatsApp, del club o del CIC. '
@@ -1132,9 +1154,13 @@ async function pantallaPedidos(cont, vista) {
       `).join('')}
     </div>
 
+    ${agrupado ? bloqueBuzon(buzon) : ''}
+
     ${visibles.length
-      ? `<div class="lista">${visibles.map((p) => filaPedido(p, cantidad.get(p.id) || 0)).join('')}</div>`
-      : '<p class="faint">No hay pedidos con ese filtro.</p>'}`;
+      ? (agrupado
+        ? grupos(visibles, cantidad)
+        : `<div class="lista">${visibles.map((p) => filaPedido(p, cantidad.get(p.id) || 0)).join('')}</div>`)
+      : `<p class="faint">${agrupado ? 'No hay nada pendiente.' : 'No hay pedidos con ese filtro.'}</p>`}`;
 
   cont.querySelector('.chips').addEventListener('click', (e) => {
     const b = e.target.closest('[data-filtro]');
@@ -1143,10 +1169,246 @@ async function pantallaPedidos(cont, vista) {
     pantallaPedidos(cont, vista);
   });
 
+  cont.querySelector('#revisar-buzon')?.addEventListener('click', () => modalBuzon(buzon, cont, vista));
+
   cont.querySelectorAll('[data-pedido]').forEach((el) =>
     el.addEventListener('click', () => modalPedido(el.dataset.pedido, vista)));
 
   if (puedeCargar()) fab(cont, () => modalPedido(null, vista), 'Nuevo pedido');
+}
+
+/**
+ * El buzón sin romper la pantalla. Si no hay señal o el canal no está
+ * conectado, Pedidos tiene que abrir igual: es la pantalla de todos los días.
+ */
+async function bandejaSegura() {
+  if (!auth.puede('gestionarCanalWeb')) return [];
+  try {
+    const est = await nube.estado();
+    if (!est.conectado) return [];
+    return await nube.bandeja();
+  } catch {
+    return [];
+  }
+}
+
+function bloqueBuzon(buzon) {
+  if (!buzon.length) return '';
+  return `
+    <div class="card" data-accent="pedidos" style="margin-bottom:var(--sp-4)">
+      <div class="between">
+        <div>
+          <div><strong>Nuevos del catálogo</strong> <span class="badge badge--warn">${buzon.length}</span></div>
+          <div class="faint">${buzon.length === 1
+            ? 'Un pedido esperando que lo revisen'
+            : `${buzon.length} pedidos esperando que los revisen`}</div>
+        </div>
+        <button class="btn btn--primary" id="revisar-buzon">Revisar</button>
+      </div>
+    </div>`;
+}
+
+/** Agrupa lo abierto por estado. Solo se pintan los grupos que tienen algo. */
+function grupos(pedidos, cantidad) {
+  return ESTADOS_ABIERTOS.map((estado) => {
+    const delGrupo = pedidos.filter((p) => p.estado === estado);
+    if (!delGrupo.length) return '';
+    return `
+      <div class="grupo">
+        <div class="grupo__titulo">
+          ${ESTADO_PEDIDO[estado]?.etiqueta || estado}
+          <span class="grupo__cuenta num">${delGrupo.length}</span>
+        </div>
+        <div class="lista">
+          ${delGrupo.map((p) => filaPedido(p, cantidad.get(p.id) || 0)).join('')}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* ------------------------------------------------------------------ */
+/*  Revisión del buzón                                                 */
+/* ------------------------------------------------------------------ */
+
+/** La cola: se revisa de a uno, del más viejo al más nuevo. */
+function modalBuzon(buzon, cont, vista, indice = 0) {
+  const pedidoWeb = buzon[indice];
+  if (!pedidoWeb) {
+    ui.cerrarModal();
+    return pantallaPedidos(cont, vista);
+  }
+  modalRevisar(pedidoWeb, buzon, indice, cont, vista);
+}
+
+async function modalRevisar(pedidoWeb, buzon, indice, cont, vista) {
+  let revision;
+  try {
+    revision = await revisarPedidoWeb(pedidoWeb);
+  } catch (err) {
+    return ui.toast(err.message, true);
+  }
+
+  // Por línea: qué producto del SO es y a qué precio se acepta. Arranca en lo
+  // que vio el cliente, que es lo que pidió.
+  const eleccion = new Map(revision.lineas.map((l, i) => [i, {
+    productoId: l.producto?.id || null,
+    precio: l.precioWeb,
+  }]));
+
+  const codigo = pedidoWeb.id.replace(/-/g, '').slice(0, 6).toUpperCase();
+  const productos = state.productos.filter((p) => p.activo);
+
+  ui.abrirModal(`
+    <div class="between">
+      <h3 style="margin:0">Pedido ${codigo}</h3>
+      <span class="faint">${indice + 1} de ${buzon.length}</span>
+    </div>
+
+    <div class="card" style="margin-top:var(--sp-3)">
+      <div><strong>${ui.esc(pedidoWeb.nombre)}</strong></div>
+      <div class="faint">${ui.esc(pedidoWeb.telefono)} ·
+        ${revision.cliente ? 'ya es cliente' : 'cliente nuevo, se crea al aceptar'}</div>
+      <div style="margin-top:var(--sp-2)">
+        <span class="entrega entrega--${pedidoWeb.modo_entrega === 'domicilio' ? 'domicilio' : 'retira'}">
+          ${etiquetaEntrega(pedidoWeb.modo_entrega)}
+        </span>
+        ${pedidoWeb.direccion ? ` <span class="faint">${ui.esc(pedidoWeb.direccion)}</span>` : ''}
+      </div>
+      ${pedidoWeb.fecha_deseada ? `<div class="faint">Lo quiere para el ${ui.fecha(pedidoWeb.fecha_deseada)}</div>` : ''}
+      ${pedidoWeb.notas ? `<div class="faint">Nota: ${ui.esc(pedidoWeb.notas)}</div>` : ''}
+    </div>
+
+    <div class="lista" style="margin-top:var(--sp-3)" id="rev-lineas">
+      ${revision.lineas.map((l, i) => `
+        <div class="card" data-linea="${i}">
+          <div class="between">
+            <div style="min-width:0">
+              <div>${l.cantidad}× ${ui.esc(l.nombre)}</div>
+              <div class="faint">
+                ${l.producto
+                  ? `hay ${l.stock} en stock`
+                  : '<span class="danger">no matchea con ningún producto</span>'}
+              </div>
+            </div>
+            <div class="right">
+              <div class="num">${ui.money(l.precioWeb * l.cantidad)}</div>
+            </div>
+          </div>
+
+          ${l.producto ? '' : `
+            <select class="input" data-mapear="${i}" style="margin-top:var(--sp-2)">
+              <option value="">Elegí a qué producto corresponde…</option>
+              ${productos.map((p) => `<option value="${p.id}">${ui.esc(p.nombre)}</option>`).join('')}
+            </select>`}
+
+          ${l.cambio ? `
+            <div style="margin-top:var(--sp-2)">
+              <div class="faint">El precio cambió desde que se publicó:</div>
+              <div class="chips" data-precio="${i}">
+                <button class="chip sel" data-usar="web">Como pidió · ${ui.money(l.precioWeb)}</button>
+                <button class="chip" data-usar="so">Precio de hoy · ${ui.money(l.precioSO)}</button>
+              </div>
+            </div>` : ''}
+        </div>`).join('')}
+    </div>
+
+    <div class="calculo" id="rev-total">—</div>
+    <p class="faint" id="rev-error" style="color:var(--danger)"></p>
+
+    <div class="row" style="margin-top:var(--sp-3)">
+      <button class="btn btn--danger grow" id="rev-descartar">Descartar</button>
+      <button class="btn btn--primary grow" id="rev-aceptar">Aceptar pedido</button>
+    </div>
+  `, (root) => {
+    const pintarTotal = () => {
+      const total = revision.lineas.reduce(
+        (a, l, i) => a + (eleccion.get(i).precio * l.cantidad), 0,
+      );
+      const sinMapear = [...eleccion.values()].filter((e) => !e.productoId).length;
+      root.querySelector('#rev-total').innerHTML = `
+        <div>Total <b class="num">${ui.money(total)}</b></div>
+        ${sinMapear ? `<div class="faint danger">Falta elegir el producto de ${sinMapear} ${sinMapear === 1 ? 'línea' : 'líneas'}</div>` : ''}`;
+    };
+    pintarTotal();
+
+    root.querySelector('#rev-lineas').addEventListener('change', (e) => {
+      const sel = e.target.closest('[data-mapear]');
+      if (!sel) return;
+      eleccion.get(Number(sel.dataset.mapear)).productoId = sel.value || null;
+      pintarTotal();
+    });
+
+    root.querySelector('#rev-lineas').addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-usar]');
+      if (!chip) return;
+      const i = Number(chip.closest('[data-precio]').dataset.precio);
+      const l = revision.lineas[i];
+      eleccion.get(i).precio = chip.dataset.usar === 'so' ? l.precioSO : l.precioWeb;
+      chip.parentElement.querySelectorAll('.chip').forEach((c) => c.classList.remove('sel'));
+      chip.classList.add('sel');
+      pintarTotal();
+    });
+
+    alGuardar(root.querySelector('#rev-aceptar'), async () => {
+      const error = root.querySelector('#rev-error');
+      error.textContent = '';
+
+      const items = revision.lineas.map((l, i) => ({
+        producto_id: eleccion.get(i).productoId,
+        cantidad: l.cantidad,
+        precio: eleccion.get(i).precio,
+      }));
+
+      if (items.some((it) => !it.producto_id)) {
+        error.textContent = 'Elegí a qué producto corresponde cada línea antes de aceptar.';
+        return;
+      }
+
+      try {
+        const { faltantes } = await importarPedidoWeb(pedidoWeb, {
+          clienteId: revision.cliente?.id || null,
+          items,
+        });
+        await refrescar();
+        ui.toast(faltantes.length
+          ? `Pedido aceptado · falta producir ${faltantes.length} ${faltantes.length === 1 ? 'producto' : 'productos'}`
+          : 'Pedido aceptado');
+        modalBuzon(buzon, cont, vista, indice + 1);
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    }, 'Aceptando…');
+
+    root.querySelector('#rev-descartar').addEventListener('click', () =>
+      modalDescartar(pedidoWeb, () => modalBuzon(buzon, cont, vista, indice + 1)));
+  });
+}
+
+function modalDescartar(pedidoWeb, onListo) {
+  ui.abrirModal(`
+    <h3>Descartar el pedido</h3>
+    <p class="faint">No se borra: queda en el buzón con el motivo, por si el
+      cliente después pregunta.</p>
+    <div class="field" style="margin-top:var(--sp-3)">
+      <label for="d-motivo">Por qué</label>
+      <input class="input" id="d-motivo" placeholder="Prueba, broma, duplicado, error de carga…">
+    </div>
+    <p class="faint" id="d-error" style="color:var(--danger)"></p>
+    <div class="row" style="margin-top:var(--sp-3)">
+      <button class="btn grow" data-close>Cancelar</button>
+      <button class="btn btn--danger grow" id="d-ok">Descartar</button>
+    </div>
+  `, (root) => {
+    alGuardar(root.querySelector('#d-ok'), async () => {
+      try {
+        await descartarPedidoWeb(pedidoWeb.id, root.querySelector('#d-motivo').value);
+        ui.toast('Pedido descartado');
+        onListo();
+      } catch (err) {
+        root.querySelector('#d-error').textContent = err.message;
+      }
+    }, 'Descartando…');
+  });
 }
 
 /**

@@ -383,6 +383,23 @@ body.con-login { overflow: hidden; }
 .entrega--retira    { background: color-mix(in srgb, var(--caja) 18%, transparent);    color: var(--caja); }
 .entrega--domicilio { background: color-mix(in srgb, var(--pedidos) 20%, transparent); color: var(--pedidos); }
 
+/* Lo pendiente se agrupa por estado: la pregunta de la mañana es qué cocinar
+   y qué entregar, no cuántos pedidos hay */
+.grupo { margin-bottom: var(--sp-5); }
+
+.grupo__titulo {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2); padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  font-size: .74rem; font-weight: 800; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+
+.grupo__cuenta {
+  padding: 0 var(--sp-2); border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim); font-size: .72rem;
+}
+
 /* ---------- Agenda de entregas ---------- */
 
 .agenda__dia { margin-bottom: var(--sp-5); }
