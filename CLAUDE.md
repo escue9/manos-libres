@@ -134,6 +134,11 @@ Al portar un mockup:
 - [ ] **Fase 4 — Caja** · movimientos, cierre semanal, rentabilidad, exportables
 - [ ] **Fase 5 — Nube** · Supabase, RLS, sync, deploy en Vercel
 
+**Canal de venta online** (`docs/BRIEF-CANAL-ONLINE.md`) — hecho fuera de orden
+porque no dependía de la Fase 4. Adelanta parte de la Fase 5: catálogo público,
+buzón de pedidos en Supabase con RLS, y el panel de pendientes del SO.
+Producción, stock, jornadas y caja **siguen locales**. Falta el deploy.
+
 Cada fase deja el sistema usable. No arranques una fase sin cerrar la anterior.
 
 ---
