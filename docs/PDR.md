@@ -213,11 +213,15 @@ Una jornada de cocina. Descuenta insumos, suma producto terminado.
 | `id` | uuid PK | |
 | `unidad_negocio_id` | uuid FK | |
 | `cliente_id` | uuid FK | |
-| `canal` | enum | `whatsapp` \| `instagram` \| `cic_presencial` \| `club_uncas` \| `otro` |
+| `canal` | enum | Por dónde ENTRÓ: `whatsapp` \| `instagram` \| `catalogo_web` \| `mostrador_cic` \| `mostrador_uncas` \| `otro` |
+| `modo_entrega` | enum | Cómo LLEGA: `en_el_acto` \| `retira_cic` \| `domicilio`. Retiro y domicilio son dos trabajos distintos |
+| `direccion_entrega` | text | Solo si `modo_entrega` = `domicilio` |
+| `costo_envio` | decimal | Hoy siempre 0. Suma al `total` pero queda **afuera** del margen del producto, o la rentabilidad por producto se infla con el flete |
+| `origen_web_id` | uuid | El `pedido_web` del que vino, si vino del catálogo online |
 | `fecha_pedido` | date | |
 | `fecha_entrega` | date | Para la agenda de entregas |
 | `estado` | enum | `pendiente` \| `confirmado` \| `en_produccion` \| `listo` \| `entregado` \| `cancelado` |
-| `total` | decimal | Suma de items menos descuento |
+| `total` | decimal | Suma de items menos descuento, más `costo_envio` |
 | `descuento` | decimal | |
 | `monto_cobrado` | decimal | Suma de cobros. Derivado |
 | `estado_pago` | enum | `impago` \| `sena` \| `pagado` — derivado de cobros vs total |

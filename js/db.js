@@ -15,7 +15,15 @@
  */
 
 const DB_NAME = 'cocina_cic';
-const DB_VERSION = 2;
+
+/**
+ * Subir esto cada vez que cambie la forma de los datos, y escribir la
+ * migración en `migrar()`.
+ *
+ *  2 → 3  `canal` mezclaba por dónde entró el pedido con cómo llega al
+ *         cliente. Se separa en `canal` + `modo_entrega`.
+ */
+const DB_VERSION = 3;
 
 export const TABLES = [
   'config',
@@ -50,7 +58,7 @@ const INDEXES = {
   movimiento_stock_insumo: ['insumo_id', 'fecha'],
   movimiento_stock_producto: ['producto_id', 'fecha'],
   cliente: ['telefono'],
-  pedido: ['cliente_id', 'estado', 'fecha_entrega', 'fecha_pedido'],
+  pedido: ['cliente_id', 'estado', 'fecha_entrega', 'fecha_pedido', 'modo_entrega', 'origen_web_id'],
   pedido_item: ['pedido_id', 'producto_id'],
   cobro: ['pedido_id', 'fecha'],
   trabajadora: ['unidad_negocio_id', 'activa'],
@@ -67,15 +75,63 @@ function open() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (e) => {
       const idb = e.target.result;
+      const tx = e.target.transaction;
+
       for (const t of TABLES) {
-        if (idb.objectStoreNames.contains(t)) continue;
-        const store = idb.createObjectStore(t, { keyPath: 'id' });
-        for (const idx of INDEXES[t] || []) store.createIndex(idx, idx);
+        const store = idb.objectStoreNames.contains(t)
+          ? tx.objectStore(t)
+          : idb.createObjectStore(t, { keyPath: 'id' });
+
+        // Los índices se revisan también sobre stores que ya existían: agregar
+        // un índice nuevo no puede obligar a borrar la base de una cocina que
+        // ya tiene meses de datos cargados.
+        for (const idx of INDEXES[t] || []) {
+          if (!store.indexNames.contains(idx)) store.createIndex(idx, idx);
+        }
       }
+
+      // oldVersion 0 es una base recién creada: no hay nada que migrar.
+      if (e.oldVersion > 0 && e.oldVersion < 3) migrarAEntrega(tx);
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
     req.onerror = () => reject(req.error);
   });
+}
+
+/**
+ * v2 → v3 — separa `canal` de `modo_entrega`.
+ *
+ * `canal` mezclaba dos preguntas distintas: por dónde ENTRÓ el pedido y cómo
+ * LLEGA al cliente. Con el canal web hay pedidos que entran por la página y se
+ * entregan a domicilio, así que la mezcla ya no cierra.
+ *
+ * Lo que se cargó en el mostrador se entregó en el acto; del resto no hay dato
+ * histórico, así que quedan como retiro en el CIC, que es lo que se venía
+ * haciendo. `costo_envio` queda preparado en cero: hoy el envío no se cobra,
+ * pero cuando se cobre tiene que sumar al total sin ensuciar el margen del
+ * producto (regla 4).
+ */
+function migrarAEntrega(tx) {
+  const RENOMBRE = { cic_presencial: 'mostrador_cic', club_uncas: 'mostrador_uncas' };
+  const store = tx.objectStore('pedido');
+
+  store.openCursor().onsuccess = (e) => {
+    const cursor = e.target.result;
+    if (!cursor) return;
+
+    const p = cursor.value;
+    const enElActo = p.es_mostrador === true || Object.hasOwn(RENOMBRE, p.canal ?? '');
+
+    cursor.update({
+      ...p,
+      canal: RENOMBRE[p.canal] || p.canal || 'otro',
+      modo_entrega: p.modo_entrega || (enElActo ? 'en_el_acto' : 'retira_cic'),
+      direccion_entrega: p.direccion_entrega ?? null,
+      costo_envio: p.costo_envio ?? 0,
+      origen_web_id: p.origen_web_id ?? null,
+    });
+    cursor.continue();
+  };
 }
 
 function uuid() {

@@ -144,7 +144,7 @@ Cada fase deja el sistema usable. No arranques una fase sin cerrar la anterior.
 - Probar siempre en vista mobile del navegador, no en desktop
 - Antes de dar una fase por terminada, revisá el checklist de §8 del PDR
 - Los datos de prueba se cargan desde `js/db.js` → `seed()`
-- Correr `npm test` antes de cerrar cualquier fase — son las ocho suites juntas.
+- Correr `npm test` antes de cerrar cualquier fase — son las nueve suites juntas.
   Si tocaste `db.js`, `auth.js` o `calc.js`, agregá el caso que cubra el cambio.
 - Para empezar de cero: en la consola `await db.reset()` y recargar. Ojo que eso
   también borra el PIN de administración.

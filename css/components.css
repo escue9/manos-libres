@@ -374,6 +374,15 @@ body.con-login { overflow: hidden; }
 /* Un pedido lleva dos estados a la vez: el del pedido y el del pago */
 .fila__lado--badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 
+/* Retirar y repartir son dos trabajos distintos: se distinguen de un vistazo */
+.entrega {
+  display: inline-block; padding: 1px var(--sp-2);
+  border-radius: 999px; font-size: .7rem; font-weight: 800;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.entrega--retira    { background: color-mix(in srgb, var(--caja) 18%, transparent);    color: var(--caja); }
+.entrega--domicilio { background: color-mix(in srgb, var(--pedidos) 20%, transparent); color: var(--pedidos); }
+
 /* ---------- Agenda de entregas ---------- */
 
 .agenda__dia { margin-bottom: var(--sp-5); }

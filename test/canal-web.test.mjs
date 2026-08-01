@@ -136,9 +136,11 @@ t('guarda producto_id para poder mapear al importar', alta.cuerpo.producto_id ==
 t('sube activo', alta.cuerpo.activo === true);
 
 // Regla 8: el catálogo es público. El costo es información interna.
-const publicado = JSON.stringify(alta.cuerpo);
+// Ojo con buscar el número suelto dentro del JSON: los uuid son aleatorios y
+// tarde o temprano alguno contiene "350" y el test falla sin motivo.
 t('NO publica el costo ni el margen',
-  !publicado.includes('costo') && !publicado.includes('350'));
+  !Object.keys(alta.cuerpo).some((k) => /costo|margen/.test(k))
+  && !Object.values(alta.cuerpo).includes(empanada.costo_manual));
 
 t('resuelve el duplicado en vez de crear otro ítem',
   alta.url.includes('on_conflict=producto_id')
@@ -218,6 +220,62 @@ t('desconectar deja el canal sin sesión', est.conectado === false);
 t('pero no borra la URL ni la key', est.configurado === true);
 t('una operación sin sesión avisa en vez de romper',
   /no está conectado/.test((await tira(() => nube.listarCatalogo())).message));
+
+/* ================================================================== */
+console.log('\n── el pedido ahora dice cómo se entrega');
+
+const ped = await import('../js/modules/pedidos.js');
+const tarta = state.productos.find((p) => p.nombre === 'Tarta de verdura');
+const unItem = [{ producto_id: tarta.id, cantidad: 1 }];
+
+err = await tira(() => ped.crearPedido({
+  cliente: { nombre: 'Sin calle' }, modoEntrega: 'domicilio', items: unItem,
+}));
+t('un envío a domicilio sin dirección no se guarda', !!err);
+t('y lo dice con todas las letras', /dirección/i.test(err.message));
+
+const { pedido: aDomicilio } = await ped.crearPedido({
+  cliente: { nombre: 'Vero', telefono: '2494551234' },
+  canal: 'catalogo_web',
+  modoEntrega: 'domicilio',
+  direccionEntrega: 'Av. Espora 1450',
+  origenWebId: 'web-1',
+  items: unItem,
+});
+t('guarda el modo de entrega y la dirección',
+  aDomicilio.modo_entrega === 'domicilio' && aDomicilio.direccion_entrega === 'Av. Espora 1450');
+t('guarda de qué pedido web vino', aDomicilio.origen_web_id === 'web-1');
+t('el canal del catálogo es catalogo_web', aDomicilio.canal === 'catalogo_web');
+t('el costo de envío nace en cero', aDomicilio.costo_envio === 0);
+
+const { pedido: raro } = await ped.crearPedido({
+  cliente: { nombre: 'Modo raro' }, modoEntrega: 'teletransporte', items: unItem,
+});
+t('un modo de entrega inventado cae en retiro, no rompe', raro.modo_entrega === 'retira_cic');
+
+// El envío suma al total pero NO puede entrar al margen del producto, o la
+// rentabilidad por producto queda inflada con el flete.
+const { pedido: conEnvio } = await ped.crearPedido({
+  cliente: { nombre: 'Con flete' },
+  modoEntrega: 'domicilio', direccionEntrega: 'Rodríguez 500', costoEnvio: 1200,
+  items: unItem,
+});
+t('el envío suma al total del pedido', conEnvio.total === tarta.precio_venta + 1200);
+t('y queda guardado aparte para poder sacarlo del margen', conEnvio.costo_envio === 1200);
+
+err = await tira(() => ped.crearPedido({
+  cliente: { nombre: 'Flete negativo' },
+  modoEntrega: 'domicilio', direccionEntrega: 'Rodríguez 500', costoEnvio: -500,
+  items: unItem,
+}));
+t('un costo de envío negativo no pasa', !!err);
+
+const venta = await ped.registrarVenta({
+  lineas: [{ producto: tarta, cantidad: 1 }], medio: 'efectivo',
+});
+const pedidoVenta = await db.from('pedido').select().eq('id', venta.pedido.id).single();
+t('la venta rápida entra por el mostrador del CIC', pedidoVenta.canal === 'mostrador_cic');
+t('y se entrega en el acto', pedidoVenta.modo_entrega === 'en_el_acto');
 
 /* ================================================================== */
 console.log('\n── QR del catálogo');

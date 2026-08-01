@@ -38,13 +38,29 @@ const EPS = 1e-6;
 const hoyISO = () => ui.hoyISO();
 const ahoraISO = () => ui.ahoraISO();
 
+/**
+ * Por dónde ENTRÓ el pedido. No confundir con `MODOS_ENTREGA`, que es cómo
+ * llega al cliente: hasta la v3 del esquema `canal` mezclaba las dos cosas y
+ * un pedido del catálogo web entregado a domicilio no tenía cómo describirse.
+ */
 export const CANALES = [
-  { id: 'whatsapp',       etiqueta: 'WhatsApp' },
-  { id: 'instagram',      etiqueta: 'Instagram' },
-  { id: 'cic_presencial', etiqueta: 'CIC' },
-  { id: 'club_uncas',     etiqueta: 'Club Uncas' },
-  { id: 'otro',           etiqueta: 'Otro' },
+  { id: 'whatsapp',        etiqueta: 'WhatsApp' },
+  { id: 'instagram',       etiqueta: 'Instagram' },
+  { id: 'catalogo_web',    etiqueta: 'Catálogo web' },
+  { id: 'mostrador_cic',   etiqueta: 'Mostrador CIC' },
+  { id: 'mostrador_uncas', etiqueta: 'Mostrador Uncas' },
+  { id: 'otro',            etiqueta: 'Otro' },
 ];
+
+/** Cómo LLEGA al cliente. Retiro y domicilio son dos trabajos distintos. */
+export const MODOS_ENTREGA = [
+  { id: 'en_el_acto', etiqueta: 'En el acto',  corto: 'En el acto' },
+  { id: 'retira_cic', etiqueta: 'Retira en el CIC', corto: 'Retira' },
+  { id: 'domicilio',  etiqueta: 'Envío a domicilio', corto: 'Domicilio' },
+];
+
+export const etiquetaEntrega = (id) =>
+  MODOS_ENTREGA.find((m) => m.id === id)?.corto || 'Retira';
 
 export const TIPOS_CLIENTE = [
   { id: 'particular',  etiqueta: 'Particular' },
@@ -218,6 +234,7 @@ const brutoDeLineas = (lineas) => lineas.reduce((a, l) => a + l.precio * l.canti
  */
 export async function crearPedido({
   clienteId = null, cliente = null, canal = 'whatsapp',
+  modoEntrega = 'retira_cic', direccionEntrega = '', costoEnvio = 0, origenWebId = null,
   fechaPedido = hoyISO(), fechaEntrega = hoyISO(),
   items = [], descuento = 0, notas = '', estado = 'confirmado',
 } = {}) {
@@ -229,6 +246,15 @@ export async function crearPedido({
   if (!esFechaISO(fechaEntrega)) throw new Error('Falta la fecha de entrega');
   if (!esFechaISO(fechaPedido)) fechaPedido = hoyISO();
   if (!CANALES.some((c) => c.id === canal)) canal = 'otro';
+  if (!MODOS_ENTREGA.some((m) => m.id === modoEntrega)) modoEntrega = 'retira_cic';
+
+  direccionEntrega = String(direccionEntrega || '').trim();
+  if (modoEntrega === 'domicilio' && !direccionEntrega) {
+    throw new Error('Un envío a domicilio necesita la dirección');
+  }
+
+  costoEnvio = Number(costoEnvio) || 0;
+  if (costoEnvio < 0) throw new Error('El costo de envío no puede ser negativo');
 
   const lineas = await lineasConSnapshot(items);
   if (!lineas.length) throw new Error('El pedido no tiene productos');
@@ -249,10 +275,16 @@ export async function crearPedido({
     unidad_negocio_id: state.unidadNegocio.id,
     cliente_id: clienteId,
     canal,
+    modo_entrega: modoEntrega,
+    direccion_entrega: modoEntrega === 'domicilio' ? direccionEntrega : null,
+    // Preparado, hoy siempre cero. Suma al total pero queda afuera del margen
+    // del producto: ver bloqueMargen().
+    costo_envio: costoEnvio,
+    origen_web_id: origenWebId,
     fecha_pedido: fechaPedido,
     fecha_entrega: fechaEntrega,
     estado: estado === 'confirmado' && faltantes.length ? 'en_produccion' : estado,
-    total: bruto - descuento,
+    total: bruto - descuento + costoEnvio,
     descuento,
     monto_cobrado: 0,
     estado_pago: 'impago',
@@ -279,7 +311,9 @@ export async function crearPedido({
  * producto subió entre el pedido y la corrección, el cliente paga el precio que
  * se le dijo. Solo los productos que se agregan hoy se costean hoy.
  */
-export async function actualizarPedido(pedidoId, { canal, fechaEntrega, notas, descuento, items } = {}) {
+export async function actualizarPedido(pedidoId, {
+  canal, modoEntrega, direccionEntrega, fechaEntrega, notas, descuento, items,
+} = {}) {
   auth.exigir('cargarPedidos');
 
   const pedido = await db.from('pedido').select().eq('id', pedidoId).single();
@@ -311,7 +345,8 @@ export async function actualizarPedido(pedidoId, { canal, fechaEntrega, notas, d
   if (desc < 0) throw new Error('El descuento no puede ser negativo');
   if (desc > bruto + EPS) throw new Error('El descuento no puede ser mayor que el pedido');
 
-  const total = bruto - desc;
+  // El envío ya cobrado sigue formando parte del total al reeditar el pedido.
+  const total = bruto - desc + (pedido.costo_envio || 0);
   const cobrado = pedido.monto_cobrado || 0;
   if (total + EPS < cobrado) {
     throw new Error(`Ya se cobraron ${ui.money(cobrado)}: el pedido no puede quedar en menos`);
@@ -345,6 +380,15 @@ export async function actualizarPedido(pedidoId, { canal, fechaEntrega, notas, d
   if (fechaEntrega != null) patch.fecha_entrega = fechaEntrega;
   if (notas != null) patch.notas = String(notas).trim();
   if (canal != null && CANALES.some((c) => c.id === canal)) patch.canal = canal;
+
+  if (modoEntrega != null && MODOS_ENTREGA.some((m) => m.id === modoEntrega)) {
+    const dir = String(direccionEntrega ?? pedido.direccion_entrega ?? '').trim();
+    if (modoEntrega === 'domicilio' && !dir) {
+      throw new Error('Un envío a domicilio necesita la dirección');
+    }
+    patch.modo_entrega = modoEntrega;
+    patch.direccion_entrega = modoEntrega === 'domicilio' ? dir : null;
+  }
 
   await db.from('pedido').update(patch).eq('id', pedidoId);
   return db.from('pedido').select().eq('id', pedidoId).single();
@@ -706,7 +750,11 @@ export async function registrarVenta({ lineas, medio, clienteId = null }) {
   const pedido = await db.from('pedido').insert({
     unidad_negocio_id: un,
     cliente_id: clienteId,
-    canal: 'cic_presencial',
+    canal: 'mostrador_cic',
+    modo_entrega: 'en_el_acto',   // se entrega y se cobra en el mismo momento
+    direccion_entrega: null,
+    costo_envio: 0,
+    origen_web_id: null,
     fecha_pedido: fecha,
     fecha_entrega: fecha,
     estado: 'pendiente',
@@ -1009,6 +1057,13 @@ function filaPedido(p, cantItems) {
           <span class="dim">·</span>
           <span class="num">${ui.money(p.total)}</span>
         </div>
+        ${p.modo_entrega === 'en_el_acto' ? '' : `
+          <div class="fila__meta">
+            <span class="entrega entrega--${p.modo_entrega === 'domicilio' ? 'domicilio' : 'retira'}">
+              ${etiquetaEntrega(p.modo_entrega)}
+            </span>
+            ${p.direccion_entrega ? `<span class="dim">${ui.esc(p.direccion_entrega)}</span>` : ''}
+          </div>`}
       </div>
       <div class="fila__lado fila__lado--badges">
         <span class="badge ${e.badge}">${e.etiqueta}</span>
@@ -1150,7 +1205,12 @@ const medioEtiqueta = (id) => MEDIOS.find((m) => m.id === id)?.etiqueta || id ||
 /** El margen del pedido, con los costos congelados. Solo para quien ve costos. */
 function bloqueMargen(items, pedido) {
   const costo = items.reduce((a, i) => a + i.costo_unitario * i.cantidad, 0);
-  const m = calc.margen(pedido.total || 0, costo);
+
+  // El envío no es venta de producto: entra al total que paga el cliente pero
+  // sale del margen, o el día que se empiece a cobrar toda la rentabilidad por
+  // producto queda inflada por el flete.
+  const venta = (pedido.total || 0) - (pedido.costo_envio || 0);
+  const m = calc.margen(venta, costo);
   return `
     <div class="between" style="margin-top:var(--sp-2)">
       <span class="faint">Costo de mercadería</span>
@@ -1194,6 +1254,8 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
 
   const valor = {
     canal: borrador?.canal || pedido?.canal || 'whatsapp',
+    modoEntrega: borrador?.modoEntrega || pedido?.modo_entrega || 'retira_cic',
+    direccion: borrador?.direccion ?? pedido?.direccion_entrega ?? '',
     fecha: borrador?.fecha || pedido?.fecha_entrega || hoyISO(),
     descuento: borrador?.descuento ?? pedido?.descuento ?? 0,
     notas: borrador?.notas ?? pedido?.notas ?? '',
@@ -1220,6 +1282,21 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
           <label for="p-fecha">Se entrega</label>
           <input class="input" id="p-fecha" type="date" value="${valor.fecha}">
         </div>
+      </div>
+
+      <div class="field">
+        <label for="p-entrega">Cómo lo recibe</label>
+        <select class="input" id="p-entrega">
+          ${MODOS_ENTREGA.map((m) => `
+            <option value="${m.id}" ${m.id === valor.modoEntrega ? 'selected' : ''}>${m.etiqueta}</option>
+          `).join('')}
+        </select>
+      </div>
+
+      <div class="field ${valor.modoEntrega === 'domicilio' ? '' : 'hidden'}" id="p-campo-dir">
+        <label for="p-direccion">Dirección de entrega</label>
+        <input class="input" id="p-direccion" placeholder="Calle, número y entre calles"
+               value="${ui.esc(valor.direccion)}">
       </div>
 
       <div>
@@ -1324,6 +1401,8 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
       cantidades,
       clienteId,
       canal: root.querySelector('#p-canal').value,
+      modoEntrega: root.querySelector('#p-entrega').value,
+      direccion: root.querySelector('#p-direccion').value,
       fecha: root.querySelector('#p-fecha').value,
       descuento: root.querySelector('#p-descuento').value,
       notas: root.querySelector('#p-notas').value,
@@ -1360,10 +1439,19 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
 
     root.querySelector('#p-descuento').addEventListener('input', pintarTotal);
 
+    // La dirección solo tiene sentido si sale a la calle.
+    root.querySelector('#p-entrega').addEventListener('change', (e) => {
+      const aDomicilio = e.target.value === 'domicilio';
+      root.querySelector('#p-campo-dir').classList.toggle('hidden', !aDomicilio);
+      if (aDomicilio) root.querySelector('#p-direccion').focus();
+    });
+
     alGuardar(root.querySelector('#p-guardar'), async () => {
       const items = [...cantidades.entries()].map(([producto_id, cantidad]) => ({ producto_id, cantidad }));
       const datos = {
         canal: root.querySelector('#p-canal').value,
+        modoEntrega: root.querySelector('#p-entrega').value,
+        direccionEntrega: root.querySelector('#p-direccion').value,
         fechaEntrega: root.querySelector('#p-fecha').value,
         descuento: root.querySelector('#p-descuento').value,
         notas: root.querySelector('#p-notas').value,
