@@ -28,6 +28,7 @@ const PERMISOS = {
     cargarPedidos: true,
     anularPedidos: true,
     gestionarCanalWeb: true,
+    cargarCaja: true,
     liquidar: true,
     exportar: true,
   },
@@ -44,6 +45,7 @@ const PERMISOS = {
     cargarPedidos: true,        // vende, entrega y cobra: es su trabajo
     anularPedidos: false,       // deshacer una venta mueve stock Y caja
     gestionarCanalWeb: false,   // publicar precios al público es de administración
+    cargarCaja: false,          // no ve la caja siquiera (regla 8)
     liquidar: false,
     exportar: false,
   },
@@ -60,6 +62,7 @@ const PERMISOS = {
     cargarPedidos: false,
     anularPedidos: false,
     gestionarCanalWeb: false,
+    cargarCaja: false,          // la comisión mira, no opera
     liquidar: false,
     exportar: true,
   },

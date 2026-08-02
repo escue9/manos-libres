@@ -8,7 +8,7 @@
  * Subí CACHE_VERSION en cada deploy o los usuarios quedan con la versión vieja.
  */
 
-const CACHE_VERSION = 'cocina-cic-v5';
+const CACHE_VERSION = 'cocina-cic-v6';
 
 const SHELL = [
   './',

@@ -324,6 +324,68 @@ export function resumenCliente(pedidos = []) {
  * Clasifica productos en los cuatro cuadrantes del PDR §4.4.
  * Los umbrales son la mediana del conjunto: siempre relativos al propio negocio.
  */
+/**
+ * Rentabilidad por producto sobre lo entregado en el período.
+ *
+ * Usa los snapshots de `pedido_item`, nunca los precios ni los costos de hoy
+ * (regla 4): si en el medio subió la harina, la semana pasada no cambia.
+ *
+ * El descuento se prorratea entre las líneas del pedido en proporción a lo que
+ * pesa cada una. Sin prorratearlo, la suma de la facturación por producto no
+ * da igual que las ventas del cierre, y dos pantallas que miran lo mismo
+ * mostrarían números distintos.
+ */
+export function rentabilidadProductos({ pedidos = [], items = [], productos = [] }) {
+  const entregados = new Map(
+    pedidos.filter((p) => p.estado === 'entregado').map((p) => [p.id, p]),
+  );
+
+  // Cuánto factura cada pedido antes del descuento, para saber qué proporción
+  // del descuento le toca a cada línea.
+  const brutoPorPedido = new Map();
+  for (const i of items) {
+    if (!entregados.has(i.pedido_id)) continue;
+    const monto = i.cantidad * i.precio_unitario;
+    brutoPorPedido.set(i.pedido_id, (brutoPorPedido.get(i.pedido_id) || 0) + monto);
+  }
+
+  const nombres = new Map(productos.map((p) => [p.id, p.nombre]));
+  const acc = new Map();
+
+  for (const i of items) {
+    const pedido = entregados.get(i.pedido_id);
+    if (!pedido) continue;
+
+    const bruto = i.cantidad * i.precio_unitario;
+    const brutoPedido = brutoPorPedido.get(i.pedido_id) || 0;
+    const proporcion = brutoPedido > 0 ? bruto / brutoPedido : 0;
+    const descuento = (pedido.descuento || 0) * proporcion;
+
+    const fila = acc.get(i.producto_id) || {
+      producto_id: i.producto_id,
+      nombre: nombres.get(i.producto_id) || 'Producto dado de baja',
+      unidades: 0, facturacion: 0, costo: 0,
+    };
+
+    fila.unidades += i.cantidad;
+    fila.facturacion += bruto - descuento;
+    fila.costo += i.cantidad * i.costo_unitario;
+    acc.set(i.producto_id, fila);
+  }
+
+  const filas = [...acc.values()];
+  const total = filas.reduce((a, f) => a + f.facturacion, 0);
+
+  return filas
+    .map((f) => ({
+      ...f,
+      margen: f.facturacion - f.costo,
+      margenPct: f.facturacion > 0 ? ((f.facturacion - f.costo) / f.facturacion) * 100 : 0,
+      aportePct: total > 0 ? (f.facturacion / total) * 100 : 0,
+    }))
+    .sort((a, b) => b.facturacion - a.facturacion);
+}
+
 export function cuadrantes(filas) {
   if (!filas.length) return [];
 
