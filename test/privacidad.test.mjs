@@ -36,6 +36,7 @@ const htmlAdmin = v.innerHTML;
 console.log('  ve a Ana:  ', htmlAdmin.includes('Ana'));
 console.log('  ve a María:', htmlAdmin.includes('María'));
 console.log('  ve tarifas:', /12\.345|12345/.test(htmlAdmin));
+console.log('  ve el rol:  ', /Trabajadora/.test(htmlAdmin));
 
 console.log('\n── vista TRABAJADORA (María)');
 auth.rol='trabajadora'; auth.trabajadoraId=maria.id;
@@ -50,6 +51,8 @@ if (h.includes('Liquidar'))       fugas.push('ve el botón de liquidar');
 if (h.includes('Total de la semana')) fugas.push('ve el total del equipo');
 if (h.includes('Editar'))         fugas.push('ve el botón de editar');
 if (/por día/.test(h))            fugas.push('ve una tarifa diaria');
+if (/Administración|Comisión|Trabajadora/.test(h)) fugas.push('ve el rol de alguien');
+if (/sin mail|@/.test(h))         fugas.push('ve datos de la cuenta de alguien');
 
 const tarjetas = v.querySelectorAll('.card').length;
 console.log('  tarjetas visibles:', tarjetas, '(la suya + su total)');

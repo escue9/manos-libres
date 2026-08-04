@@ -24,6 +24,40 @@ import * as calc from '../calc.js';
 const DIAS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
 const NOMBRE_DIA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
+/**
+ * Los tres roles del sistema, en el mismo orden y con las mismas etiquetas que
+ * la tabla PERMISOS de auth.js.
+ *
+ * Están repetidas acá porque PERMISOS no se exporta. Traerla entera a un módulo
+ * de pantalla es peor: dejaría a cualquier vista leyendo la tabla de permisos
+ * completa para mostrar una palabra. Si en auth.js aparece un rol nuevo, se
+ * agrega también acá y al CHECK de 20260805_identidad.sql — son los tres
+ * lugares donde la lista está escrita.
+ */
+const ROLES = [
+  { id: 'admin',       etiqueta: 'Administración',
+    ayuda: 'Ve todo: costos, márgenes, caja y el equipo completo. Liquida.' },
+  { id: 'trabajadora', etiqueta: 'Trabajadora',
+    ayuda: 'Cocina, vende y cobra. Ve solo sus propias jornadas y su total.' },
+  { id: 'dirigente',   etiqueta: 'Comisión',
+    ayuda: 'Solo lectura de caja y rentabilidad. No opera nada.' },
+];
+
+const ROL_POR_DEFECTO = 'trabajadora';
+
+const rolDe = (t) => (ROLES.some((r) => r.id === t?.rol) ? t.rol : ROL_POR_DEFECTO);
+const etiquetaRol = (rol) => ROLES.find((r) => r.id === rol)?.etiqueta || 'Trabajadora';
+
+/**
+ * Con forma de mail y nada más.
+ *
+ * Validar direcciones "bien" es un pozo sin fondo y no sirve para nada acá: el
+ * mail no se usa para escribirle a nadie, es la llave con la que el servidor
+ * aparea la persona con su usuario. Lo único que importa es atajar el dedazo
+ * (falta la arroba, sobra un espacio) antes de que el sync se coma el error.
+ */
+const FORMA_DE_MAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 /** Semana que se está mirando. Se recuerda entre renders. */
 let semana = null;
 
@@ -176,12 +210,40 @@ function agruparPorTrabajadora(jornadas) {
 }
 
 /**
+ * ¿Ese mail ya lo usa otra persona del equipo?
+ *
+ * Mismo problema que `auth._pinEnUso()` y misma forma de resolverlo. Postgres
+ * tiene un índice único sobre `lower(email)` (20260805_identidad.sql), así que
+ * la segunda fila con el mismo mail la rechaza el servidor — pero eso pasa
+ * cuando corre el sync, horas después, lejos de la persona que se equivocó y
+ * con un mensaje que nadie va a leer en la cocina. Avisar acá, con el modal
+ * todavía abierto, es la diferencia entre un error y un dato mal cargado.
+ *
+ * Case-insensitive igual que el índice: `Maria@` y `maria@` son la misma.
+ * Se miran TODAS, también las inactivas: al índice no le importa el alta.
+ */
+async function emailEnUso(email, exceptoTrabajadoraId = null) {
+  const buscado = email.toLowerCase();
+  const todas = await db.from('trabajadora').select();
+  return todas.some((t) => (t.email || '').toLowerCase() === buscado && t.id !== exceptoTrabajadoraId);
+}
+
+/**
  * Alta o edición de trabajadora.
  *
  * Si cambia la tarifa deja fila en tarifa_historica desde hoy. Las jornadas ya
  * cargadas no se tocan: cada una guarda la tarifa con la que nació.
+ *
+ * `email` y `rol` son la identidad de la persona ante el servidor (Fase 5 §4.1).
+ * Ojo con la diferencia entre no mandarlos y mandarlos vacíos: `undefined` es
+ * "no los toques" y `''` es "borralo". Sin esa distinción, cualquier llamada que
+ * no los conozca —un alta desde otro módulo, un test viejo— le borraría el mail
+ * a la persona de refilón y la dejaría sin usuario del otro lado.
  */
-export async function guardarTrabajadora({ id = null, nombre, telefono = '', tarifaDia, fechaIngreso = null, activa = true }) {
+export async function guardarTrabajadora({
+  id = null, nombre, telefono = '', tarifaDia, fechaIngreso = null, activa = true,
+  email, rol,
+} = {}) {
   auth.exigir('liquidar');
 
   nombre = String(nombre || '').trim();
@@ -189,10 +251,29 @@ export async function guardarTrabajadora({ id = null, nombre, telefono = '', tar
   if (!nombre) throw new Error('Falta el nombre');
   if (!(tarifaDia >= 0)) throw new Error('La tarifa no puede ser negativa');
 
+  const tocaEmail = email !== undefined;
+  const tocaRol = rol !== undefined;
+
+  // En minúscula desde el vamos: es como lo guarda Supabase y como lo compara
+  // el índice único. Guardarlo tal cual lo tipearon deja dos verdades distintas
+  // del mismo mail según de qué lado se mire.
+  const mail = tocaEmail ? String(email ?? '').trim().toLowerCase() : null;
+  const rolNuevo = tocaRol ? String(rol ?? '').trim() : null;
+
+  if (tocaRol && !ROLES.some((r) => r.id === rolNuevo)) {
+    throw new Error('Ese rol no existe');
+  }
+  if (mail) {
+    if (!FORMA_DE_MAIL.test(mail)) throw new Error('Ese mail está mal escrito');
+    if (await emailEnUso(mail, id)) throw new Error('Ese mail ya es de otra persona del equipo');
+  }
+
   if (!id) {
     const t = await db.from('trabajadora').insert({
       unidad_negocio_id: state.unidadNegocio.id,
       nombre, telefono,
+      email: mail || null,
+      rol: rolNuevo || ROL_POR_DEFECTO,
       tarifa_dia: tarifaDia,
       fecha_ingreso: fechaIngreso || ui.hoyISO(),
       activa,
@@ -204,7 +285,10 @@ export async function guardarTrabajadora({ id = null, nombre, telefono = '', tar
   }
 
   const previa = await db.from('trabajadora').select().eq('id', id).single();
-  await db.from('trabajadora').update({ nombre, telefono, tarifa_dia: tarifaDia, activa }).eq('id', id);
+  const cambios = { nombre, telefono, tarifa_dia: tarifaDia, activa };
+  if (tocaEmail) cambios.email = mail || null;
+  if (tocaRol) cambios.rol = rolNuevo;
+  await db.from('trabajadora').update(cambios).eq('id', id);
 
   if (previa && previa.tarifa_dia !== tarifaDia) {
     // Las trabajadoras que ya existían (seed, import) no tienen fila inicial.
@@ -355,7 +439,10 @@ function tarjeta(f, fechas) {
         <div>
           <b>${ui.esc(f.trabajadora.nombre)}</b>
           ${f.trabajadora.activa === false ? '<span class="badge">Ya no trabaja</span>' : ''}
-          ${esAdmin() ? `<div class="faint">${ui.money(f.trabajadora.tarifa_dia)} por día</div>` : ''}
+          ${esAdmin() ? `<div class="faint">
+            ${ui.money(f.trabajadora.tarifa_dia)} por día ·
+            ${etiquetaRol(rolDe(f.trabajadora))}${f.trabajadora.email ? '' : ' · sin mail'}
+          </div>` : ''}
         </div>
         <div class="right">
           <div class="num" style="font-size:1.1rem">${f.dias} ${f.dias === 1 ? 'día' : 'días'}</div>
@@ -530,6 +617,7 @@ function abrirLiquidacion(fechas, resumen, vista) {
 
 function modalTrabajadora(t = null, vista = null) {
   const nueva = !t;
+  const rolActual = nueva ? ROL_POR_DEFECTO : rolDe(t);
   ui.abrirModal(`
     <h3>${nueva ? 'Nueva trabajadora' : ui.esc(t.nombre)}</h3>
     <div class="stack" style="margin-top:var(--sp-3)">
@@ -551,8 +639,31 @@ function modalTrabajadora(t = null, vista = null) {
         <label for="t-pin">PIN de acceso</label>
         <input class="input" id="t-pin" type="number" inputmode="numeric"
                placeholder="${nueva ? '4 dígitos, opcional' : 'Vacío = no cambiarlo'}">
-        <span class="faint">Con esto entra a la app y ve solo sus propias jornadas.</span>
+        <span class="faint">Con esto desbloquea la app en su propio celular.</span>
       </div>
+
+      ${!esAdmin() ? '' : `
+        <div class="field">
+          <label for="t-email">Mail de la cuenta</label>
+          <input class="input" id="t-email" type="email" inputmode="email"
+                 autocomplete="off" autocapitalize="none" spellcheck="false"
+                 placeholder="Opcional"
+                 value="${nueva ? '' : ui.esc(t.email || '')}">
+          <span class="faint">No es para mandarle mails: es la llave con la que su
+            usuario del servidor se engancha con esta ficha. Si no tiene mail propio,
+            poné uno que controles vos.</span>
+        </div>
+
+        <div class="field">
+          <label for="t-rol">Rol</label>
+          <select class="input" id="t-rol">
+            ${ROLES.map((r) => `
+              <option value="${r.id}" ${r.id === rolActual ? 'selected' : ''}>${r.etiqueta}</option>
+            `).join('')}
+          </select>
+          <span class="faint" id="t-rol-ayuda">${ROLES.find((r) => r.id === rolActual).ayuda}</span>
+        </div>`}
+
       ${nueva ? '' : `
         <label class="row" style="gap:var(--sp-2)">
           <input type="checkbox" id="t-activa" ${t.activa ? 'checked' : ''}>
@@ -564,10 +675,23 @@ function modalTrabajadora(t = null, vista = null) {
       style="margin-top:var(--sp-4)">Guardar</button>
     <button class="btn btn--ghost btn--block" data-close style="margin-top:var(--sp-2);border:none">Cancelar</button>
   `, (root) => {
+    // Qué implica cada rol no se adivina desde el nombre: "Comisión" no dice
+    // que sea solo lectura ni "Administración" que vea la caja entera.
+    const selRol = root.querySelector('#t-rol');
+    selRol?.addEventListener('change', () => {
+      root.querySelector('#t-rol-ayuda').textContent =
+        ROLES.find((r) => r.id === selRol.value)?.ayuda || '';
+    });
+
     root.querySelector('#ok').addEventListener('click', async () => {
       try {
         const pin = root.querySelector('#t-pin').value.trim();
         if (pin && !/^\d{4}$/.test(pin)) throw new Error('El PIN tiene que ser de 4 dígitos');
+
+        // Los campos de identidad solo existen para administración. Si no están
+        // en el DOM van `undefined`, que es "no los toques": mandar '' le
+        // borraría el mail a la persona al guardar cualquier otro cambio.
+        const campoMail = root.querySelector('#t-email');
 
         const guardada = await guardarTrabajadora({
           id: t?.id || null,
@@ -575,6 +699,8 @@ function modalTrabajadora(t = null, vista = null) {
           telefono: root.querySelector('#t-tel').value,
           tarifaDia: root.querySelector('#t-tarifa').value,
           activa: nueva ? true : root.querySelector('#t-activa').checked,
+          email: campoMail ? campoMail.value : undefined,
+          rol: selRol ? selRol.value : undefined,
         });
 
         if (pin) await auth.cambiarPinTrabajadora(guardada.id, pin);

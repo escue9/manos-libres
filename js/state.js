@@ -26,7 +26,13 @@ function recortarTrabajadora(t) {
   const { pin_acceso, ...resto } = t;
   if (auth.puede('verEquipoCompleto') || t.id === auth.trabajadoraId) return resto;
 
-  const { tarifa_dia, telefono, ...publico } = resto;
+  // `email` y `rol` se van con la tarifa desde la Fase 5 §4.1. El mail es la
+  // llave de la cuenta de Supabase de esa persona y el rol dice quién manda:
+  // ninguna de las dos es asunto de una compañera. La pantalla ya los esconde
+  // detrás de esAdmin(), pero esconder al renderizar no alcanza —es el mismo
+  // argumento que vale para la tarifa—: con esto en state, la consola del
+  // navegador los muestra igual.
+  const { tarifa_dia, telefono, email, rol, ...publico } = resto;
   return publico;
 }
 

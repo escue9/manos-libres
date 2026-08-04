@@ -184,6 +184,54 @@ t('rechaza nombre vacío',
 t('rechaza tarifa negativa',
   (await tira(() => eq.guardarTrabajadora({ nombre: 'X', tarifaDia: -1 }))) !== null);
 
+/* ================================================================== */
+console.log('\n── identidad: mail y rol (fase 5 §4.1)');
+
+t('nace con el rol por defecto', rocio.rol === 'trabajadora');
+t('y sin mail', rocio.email === null);
+
+const sofia = await eq.guardarTrabajadora({
+  nombre: 'Sofía', tarifaDia: 6000, email: '  Sofia@Cocina.AR  ', rol: 'admin',
+});
+t('guarda el rol que le pasan', sofia.rol === 'admin');
+t('normaliza el mail: minúscula y sin espacios', sofia.email === 'sofia@cocina.ar');
+
+t('rechaza algo que no tiene forma de mail',
+  (await tira(() => eq.guardarTrabajadora({ nombre: 'Z', tarifaDia: 100, email: 'sofia arroba cocina' }))) !== null);
+t('rechaza un mail sin punto en el dominio',
+  (await tira(() => eq.guardarTrabajadora({ nombre: 'Z', tarifaDia: 100, email: 'sofia@cocina' }))) !== null);
+
+/* El índice único de Postgres es sobre lower(email): acá tiene que doler igual */
+t('rechaza el mail repetido aunque cambien las mayúsculas',
+  (await tira(() => eq.guardarTrabajadora({ nombre: 'Z', tarifaDia: 100, email: 'SOFIA@Cocina.ar' }))) !== null);
+t('y no la dejó creada a medias',
+  !(await db.from('trabajadora').select()).some((x) => x.nombre === 'Z'));
+t('pero la misma persona sí puede reguardar su propio mail',
+  (await tira(() => eq.guardarTrabajadora({
+    id: sofia.id, nombre: 'Sofía', tarifaDia: 6000, email: 'sofia@cocina.ar', rol: 'admin',
+  }))) === null);
+
+t('rechaza un rol que no existe en auth.js',
+  (await tira(() => eq.guardarTrabajadora({ nombre: 'Z', tarifaDia: 100, rol: 'jefa' }))) !== null);
+t('acepta dirigente',
+  (await tira(() => eq.guardarTrabajadora({ id: sofia.id, nombre: 'Sofía', tarifaDia: 6000, rol: 'dirigente' }))) === null);
+
+/* Una llamada que no conoce estos campos no puede borrarlos de refilón */
+await eq.guardarTrabajadora({ id: sofia.id, nombre: 'Sofía', tarifaDia: 6500 });
+const intacta = await db.from('trabajadora').select().eq('id', sofia.id).single();
+t('no mandar mail ni rol los deja como estaban',
+  intacta.email === 'sofia@cocina.ar' && intacta.rol === 'dirigente');
+
+/* Mandarlo vacío sí es borrarlo, y el mail queda libre */
+await eq.guardarTrabajadora({ id: sofia.id, nombre: 'Sofía', tarifaDia: 6500, email: '' });
+t('mandar el mail vacío lo borra',
+  (await db.from('trabajadora').select().eq('id', sofia.id).single()).email === null);
+t('y ese mail queda libre para otra persona',
+  (await tira(() => eq.guardarTrabajadora({
+    nombre: 'Lucía', tarifaDia: 6000, email: 'sofia@cocina.ar',
+  }))) === null);
+
+/* ================================================================== */
 auth.rol = 'trabajadora';
 t('una trabajadora no puede dar de alta a otra',
   (await tira(() => eq.guardarTrabajadora({ nombre: 'Y', tarifaDia: 5000 }))) !== null);
