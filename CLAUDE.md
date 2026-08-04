@@ -136,14 +136,14 @@ Al portar un mockup:
 - [x] **Fase 2 — Ventas** · clientes, pedidos, agenda de entregas, venta rápida, cobros
 - [x] **Fase 3 — Equipo** · trabajadoras, jornadas, liquidación, vista por rol
 - [x] **Fase 4 — Caja** · movimientos, cierre semanal, rentabilidad, exportables
-- [ ] **Fase 5 — Nube** · Supabase, RLS, sync, deploy en Vercel — ver `docs/FASE-5.md`
+- [x] **Fase 5 — Nube** · Supabase, RLS, sync, deploy en Vercel — ver `docs/FASE-5.md`
   - [x] §1 y §2 · las 18 tablas en Postgres, con RLS
   - [x] §3 · el costo lo pone el servidor
   - [x] §4.1 · identidad: el PIN desbloquea, Supabase autentica
   - [x] §4.2 · el replicador (`sync.js`)
   - [x] §4.3 · los costos dejan de leerse desde la cocina
   - [x] §4.4 · el enganche en la interfaz — sync al abrir, al volver la señal y a mano
-  - [ ] deploy en Vercel
+  - [x] deploy en Vercel — https://manos-libres-app.vercel.app
 
 **Canal de venta online** (`docs/BRIEF-CANAL-ONLINE.md`) — hecho fuera de orden
 porque no dependía de la Fase 4. Adelanta parte de la Fase 5: catálogo público,

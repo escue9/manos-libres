@@ -21,3 +21,5 @@ backups/
 
 # Solo para los tests: la app no usa npm
 node_modules/
+
+.vercel

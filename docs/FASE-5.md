@@ -342,7 +342,25 @@ de cada persona. Hasta que exista, aparear a alguien se hace a mano.
 
 ### El deploy en Vercel
 
-Sin empezar. Es lo que cierra la fase, y además destraba lo que quedó colgado
-de las fases anteriores: la instalación como PWA y el arranque con modo avión
-no se pueden verificar sin HTTPS, y el catálogo público no tiene dónde vivir
-hasta entonces.
+Hecho. **https://manos-libres-app.vercel.app** sirve el SO en la raíz y el
+catálogo público en `/catalogo/` — la misma URL que espera `nube.enlacePublico()`.
+
+Ese nombre de proyecto ya existía en la cuenta, pero apuntaba a un prototipo
+React/Vite abandonado de antes del pivot a vanilla (regla 2). Se reusó a
+propósito en vez de crear uno nuevo: el historial de deploys viejo queda
+disponible para rollback si hiciera falta, pero nadie lo necesitaba.
+
+El proyecto en el dashboard de Vercel seguía configurado con el preset de
+Vite, y este repo no tiene build. `vercel.json` en la raíz fuerza
+`framework: null` con `buildCommand`/`installCommand` en `null`: sin eso el
+deploy intenta correr `vite build` contra un `package.json` que no tiene ni
+Vite ni un script `build`, y se rompe.
+
+Sube el repo entero salvo lo que ignora `.gitignore` (`node_modules/`,
+`backups/`) — `docs/`, `supabase/` y `test/` viajan también, sin costo real
+en un sitio de este tamaño y sin nada sensible adentro (la anon key de
+`catalogo/config.js` es pública por diseño, ver ese archivo).
+
+Esto destraba lo que quedó colgado de las fases anteriores: la instalación
+como PWA y el arranque con modo avión ahora se pueden verificar con HTTPS
+real, y el catálogo público tiene dónde vivir para generar el QR.
