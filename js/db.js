@@ -22,8 +22,10 @@ const DB_NAME = 'cocina_cic';
  *
  *  2 → 3  `canal` mezclaba por dónde entró el pedido con cómo llega al
  *         cliente. Se separa en `canal` + `modo_entrega`.
+ *  3 → 4  aparece el store `borrado`: las lápidas que necesita el sync para
+ *         poder contarle al servidor lo que se borró estando sin señal.
  */
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 export const TABLES = [
   'config',
@@ -45,6 +47,15 @@ export const TABLES = [
   'jornada',
   'movimiento_caja',
 ];
+
+/**
+ * Stores que existen pero NO son tablas del modelo.
+ *
+ * Quedan afuera de TABLES a propósito: `db.from('borrado')` tiene que seguir
+ * tirando "tabla desconocida". Esto es plomería del sync, no datos del negocio,
+ * y un módulo que lo lea es un módulo que se enteró de que hay un servidor.
+ */
+const STORES_INTERNOS = ['borrado'];
 
 /** Índices por tabla — acelera los filtros más usados. */
 const INDEXES = {
@@ -77,7 +88,7 @@ function open() {
       const idb = e.target.result;
       const tx = e.target.transaction;
 
-      for (const t of TABLES) {
+      for (const t of [...TABLES, ...STORES_INTERNOS]) {
         const store = idb.objectStoreNames.contains(t)
           ? tx.objectStore(t)
           : idb.createObjectStore(t, { keyPath: 'id' });
@@ -197,12 +208,35 @@ async function patchWhere(table, matchFn, patch) {
   });
 }
 
+/**
+ * Borra y deja lápida.
+ *
+ * Sin la lápida, una fila borrada sin señal es indistinguible de una fila que
+ * nunca existió en este dispositivo: el sync no tendría qué contarle al
+ * servidor y el pedido anulado el martes reaparecería el miércoles, traído de
+ * vuelta por el pull. La lápida se tira cuando el borrado llegó al servidor.
+ *
+ * `config` no deja lápidas: no viaja a la nube (ver ORDEN en sync.js).
+ */
 async function deleteMany(table, ids) {
   const idb = await open();
+  // Solo las tablas del negocio. `config` no viaja a la nube, y el propio store
+  // de lápidas obviamente no deja lápidas de lápidas.
+  const conLapida = TABLES.includes(table) && table !== 'config';
+
   return new Promise((resolve, reject) => {
-    const tx = idb.transaction(table, 'readwrite');
+    const stores = conLapida ? [table, 'borrado'] : [table];
+    const tx = idb.transaction(stores, 'readwrite');
     const store = tx.objectStore(table);
-    for (const id of ids) store.delete(id);
+    const lapidas = conLapida ? tx.objectStore('borrado') : null;
+
+    for (const id of ids) {
+      store.delete(id);
+      // La clave lleva la tabla adelante: borrar dos veces la misma fila deja
+      // una sola lápida, y dos tablas distintas nunca se pisan entre sí.
+      lapidas?.put({ id: `${table}:${id}`, tabla: table, fila_id: id, at: nowISO() });
+    }
+
     tx.oncomplete = () => resolve(ids.length);
     tx.onerror = () => reject(tx.error);
   });
@@ -328,6 +362,90 @@ export const db = {
   from: (table) => {
     if (!TABLES.includes(table)) throw new Error(`Tabla desconocida: ${table}`);
     return new Query(table);
+  },
+
+  /**
+   * Plomería del sync. La usa `sync.js` y nadie más.
+   *
+   * Va acá y no en sync.js porque es lo único que necesita escribir en
+   * IndexedDB sin pasar por el query builder: marcar una fila como sincronizada
+   * NO puede tocar `updated_at`, y todo lo que sale del builder lo toca. Si lo
+   * tocara, cada push haría parecer modificada la fila que acaba de subir y el
+   * sync no terminaría nunca.
+   */
+  _sync: {
+    /** Lo que todavía no llegó al servidor. */
+    async pendientes(table) {
+      return (await readAll(table)).filter((r) => r.sync_status === 'local');
+    },
+
+    /** Llegó. Sin tocar updated_at: ver arriba. */
+    async marcarSincronizadas(table, ids) {
+      if (!ids.length) return 0;
+      const idb = await open();
+      const enSet = new Set(ids);
+      return new Promise((resolve, reject) => {
+        const tx = idb.transaction(table, 'readwrite');
+        const store = tx.objectStore(table);
+        store.openCursor().onsuccess = (e) => {
+          const cursor = e.target.result;
+          if (!cursor) return;
+          if (enSet.has(cursor.value.id)) {
+            cursor.update({ ...cursor.value, sync_status: 'sincronizado' });
+          }
+          cursor.continue();
+        };
+        tx.oncomplete = () => resolve(ids.length);
+        tx.onerror = () => reject(tx.error);
+      });
+    },
+
+    /**
+     * Mete lo que vino del servidor.
+     *
+     * Gana el `updated_at` más nuevo. En un empate gana el remoto: si los dos
+     * lados dicen la misma hora es porque el remoto ES esta fila, que volvió.
+     * Una fila local pendiente que pierde se descarta con todo y su marca, para
+     * que el próximo push no la vuelva a subir pisando lo que acaba de bajar.
+     */
+    async fusionar(table, filas) {
+      if (!filas.length) return { nuevas: 0, actualizadas: 0, ignoradas: 0 };
+      const idb = await open();
+
+      return new Promise((resolve, reject) => {
+        const tx = idb.transaction(table, 'readwrite');
+        const store = tx.objectStore(table);
+        const cuenta = { nuevas: 0, actualizadas: 0, ignoradas: 0 };
+
+        for (const remota of filas) {
+          store.get(remota.id).onsuccess = (e) => {
+            const local = e.target.result;
+            if (!local) {
+              store.put({ ...remota, sync_status: 'sincronizado' });
+              cuenta.nuevas++;
+              return;
+            }
+            if ((local.updated_at || '') > (remota.updated_at || '')) {
+              cuenta.ignoradas++;
+              return;
+            }
+            store.put({ ...local, ...remota, sync_status: 'sincronizado' });
+            cuenta.actualizadas++;
+          };
+        }
+
+        tx.oncomplete = () => resolve(cuenta);
+        tx.onerror = () => reject(tx.error);
+      });
+    },
+
+    /** Lo que se borró y el servidor todavía no sabe. */
+    lapidas: () => readAll('borrado'),
+
+    async olvidarLapidas(claves) {
+      if (!claves.length) return 0;
+      return deleteMany('borrado', claves);
+    },
   },
 
   /**

@@ -4,7 +4,7 @@
   "type": "module",
   "description": "La app no tiene dependencias. Esto existe solo para correr los tests en Node.",
   "scripts": {
-    "test": "node test/fase-0.test.mjs && node test/venta-rapida.test.mjs && node test/fase-1.test.mjs && node test/fase-2.test.mjs && node test/fase-3.test.mjs && node test/fase-4.test.mjs && node test/canal-web.test.mjs && node test/migracion-v3.test.mjs && node test/privacidad.test.mjs && node test/regresiones.test.mjs",
+    "test": "node test/fase-0.test.mjs && node test/venta-rapida.test.mjs && node test/fase-1.test.mjs && node test/fase-2.test.mjs && node test/fase-3.test.mjs && node test/fase-4.test.mjs && node test/canal-web.test.mjs && node test/sync.test.mjs && node test/migracion-v3.test.mjs && node test/privacidad.test.mjs && node test/regresiones.test.mjs",
     "serve": "python -m http.server 8000"
   },
   "devDependencies": {
