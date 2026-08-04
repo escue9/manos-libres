@@ -28,7 +28,14 @@ await seed();
 await state.cargar();
 auth.rol = 'admin';
 
-const hoy = new Date().toISOString().slice(0, 10);
+// Local y no UTC, igual que ui.hoyISO() —que no se importa acá para no
+// arrastrar el DOM—: entre las 21 y la medianoche de Argentina el día UTC ya es
+// el siguiente, así que el pedido quedaba entregado el 3 y el test lo buscaba
+// en el 4. El suite pasaba de mañana y fallaba de noche.
+const hoy = (() => {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+})();
 
 /* ================================================================== */
 console.log('\n── carga manual de movimientos');

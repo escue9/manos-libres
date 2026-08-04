@@ -1,170 +1,48 @@
 /**
- * nube.js — el único punto por donde el SO habla con Supabase.
+ * nube.js — el canal web contra Supabase: catálogo público y buzón de pedidos.
  *
  * OJO con la regla 1 de CLAUDE.md: `db.js` es la capa de datos del SO y en la
  * fase 5 se le cambia el motor por Supabase sin tocar los módulos. Esto es otra
  * cosa y por eso vive aparte: el canal web son dos tablas que están en la nube
- * *desde ahora* porque un cliente que abre el catálogo desde su celular no
- * puede escribir en el IndexedDB de la cocina. Producción, stock, jornadas y
- * caja siguen locales y no pasan por acá.
+ * *desde antes* porque un cliente que abre el catálogo desde su celular no
+ * puede escribir en el IndexedDB de la cocina.
  *
- * Lo que se guarda de la sesión es el refresh_token, nunca la contraseña. La
- * contraseña la escribe la administración una vez y se usa para pedir el primer
- * par de tokens; de ahí en más se renueva sola.
+ * La sesión ya no vive acá. Se mudó a `sesion.js` cuando dejó de ser "la cuenta
+ * con la que el SO publica el catálogo" para ser la de la persona que usa el
+ * dispositivo (Fase 5 §4.1): ahora la comparten el canal web y el motor de
+ * datos, y no tendría sentido que el catálogo fuera dueño del login de todos.
  */
 
-import { db } from './db.js';
 import { auth } from './auth.js';
+import * as sesion from './sesion.js';
 
-const CLAVES = {
-  url:     'nube_url',
-  anon:    'nube_anon_key',
-  email:   'nube_email',
-  refresh: 'nube_refresh_token',
-};
-
-/** Se renueva un minuto antes de que venza, para no cortar una operación. */
-const MARGEN_MS = 60_000;
-
-/** Config leída de db, cacheada en memoria. */
-let cfg = null;
-
-/** { token, vence } — solo en memoria: un access token no se persiste. */
-let sesion = null;
-
-async function config() {
-  if (cfg) return cfg;
-  cfg = {
-    url:     (await db.getConfig(CLAVES.url) || '').replace(/\/+$/, ''),
-    anon:     await db.getConfig(CLAVES.anon) || '',
-    email:    await db.getConfig(CLAVES.email) || '',
-    refresh:  await db.getConfig(CLAVES.refresh) || '',
-  };
-  return cfg;
-}
-
-/** Que la próxima llamada relea de db. */
-const olvidar = () => { cfg = null; };
-
-/* ------------------------------------------------------------------ */
-/*  Sesión                                                             */
-/* ------------------------------------------------------------------ */
-
-async function guardarSesion(datos) {
-  if (!datos?.access_token) throw new Error('Supabase no devolvió el token de acceso.');
-
-  // Ojo con `|| 3600`: un expires_in de 0 es falsy y daría por bueno un token
-  // ya vencido durante una hora.
-  const seg = Number(datos.expires_in);
-  sesion = {
-    token: datos.access_token,
-    vence: Date.now() + (Number.isFinite(seg) ? seg : 3600) * 1000,
-  };
-  if (datos.refresh_token) {
-    await db.setConfig(CLAVES.refresh, datos.refresh_token);
-    olvidar();
-  }
-}
-
-async function pedirTokens(cuerpo, tipo) {
-  const c = await config();
-  const r = await fetch(`${c.url}/auth/v1/token?grant_type=${tipo}`, {
-    method: 'POST',
-    headers: { apikey: c.anon, 'Content-Type': 'application/json' },
-    body: JSON.stringify(cuerpo),
-  });
-
-  const datos = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    throw new Error(datos.error_description || datos.msg || `Supabase rechazó el login (${r.status}).`);
-  }
-  await guardarSesion(datos);
-  return datos;
-}
+const { pedir } = sesion;
 
 /**
- * Deja al SO conectado al canal web. La contraseña se usa acá y se descarta:
- * lo único que queda guardado es el refresh_token.
+ * Deja al SO conectado al canal web.
+ *
+ * Sigue pidiendo permiso de administración aunque por debajo sea el login de la
+ * sesión: elegir a qué proyecto de Supabase apunta la cocina no es algo que se
+ * haga desde el celular de alguien que vino a vender empanadas.
  */
 export async function conectar({ url, anonKey, email, password }) {
   auth.exigir('gestionarCanalWeb');
 
-  if (!url || !anonKey) throw new Error('Falta la URL o la anon key del proyecto.');
-  if (!email || !password) throw new Error('Falta el usuario o la contraseña.');
-
-  await db.setConfig(CLAVES.url, String(url).replace(/\/+$/, ''));
-  await db.setConfig(CLAVES.anon, anonKey);
-  await db.setConfig(CLAVES.email, email);
-  await db.setConfig(CLAVES.refresh, '');
-  olvidar();
-
-  sesion = null;
-  await pedirTokens({ email, password }, 'password');
+  await sesion.configurar({ url, anonKey });
+  await sesion.entrar({ email, password });
   return true;
 }
 
 export async function desconectar() {
   auth.exigir('gestionarCanalWeb');
-  await db.setConfig(CLAVES.refresh, '');
-  olvidar();
-  sesion = null;
+  await sesion.salir();
 }
 
-/** Un access token válido, renovándolo si hace falta. */
-async function token() {
-  if (sesion && sesion.vence - MARGEN_MS > Date.now()) return sesion.token;
-
-  const c = await config();
-  if (!c.refresh) throw new Error('El canal web no está conectado.');
-
-  await pedirTokens({ refresh_token: c.refresh }, 'refresh_token');
-  return sesion.token;
-}
-
-export async function estado() {
-  const c = await config();
-  return {
-    configurado: Boolean(c.url && c.anon),
-    conectado: Boolean(c.url && c.anon && c.refresh),
-    email: c.email,
-    url: c.url,
-  };
-}
+export const estado = sesion.estado;
 
 /** El link que se comparte a los clientes. */
 export function enlacePublico(base = location?.origin || '') {
   return `${String(base).replace(/\/+$/, '')}/catalogo/`;
-}
-
-/* ------------------------------------------------------------------ */
-/*  REST                                                               */
-/* ------------------------------------------------------------------ */
-
-async function pedir(ruta, { metodo = 'GET', cuerpo = null, prefer = null } = {}) {
-  const c = await config();
-  if (!c.url || !c.anon) throw new Error('El canal web no está configurado.');
-
-  const cabeceras = {
-    apikey: c.anon,
-    Authorization: `Bearer ${await token()}`,
-  };
-  if (cuerpo) cabeceras['Content-Type'] = 'application/json';
-  if (prefer) cabeceras.Prefer = prefer;
-
-  const r = await fetch(`${c.url}/rest/v1/${ruta}`, {
-    method: metodo,
-    headers: cabeceras,
-    body: cuerpo ? JSON.stringify(cuerpo) : undefined,
-  });
-
-  if (!r.ok) {
-    const texto = await r.text().catch(() => '');
-    throw new Error(`Supabase respondió ${r.status}${texto ? `: ${texto}` : ''}`);
-  }
-
-  // Un DELETE o un update con return=minimal no traen cuerpo.
-  if (r.status === 204) return null;
-  return r.json().catch(() => null);
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,4 +237,4 @@ export async function marcarDescartado(pedidoWebId, motivo = '') {
   return Array.isArray(filas) && filas.length > 0;
 }
 
-export const _paraTests = { CLAVES, olvidar };
+export const _paraTests = sesion._paraTests;

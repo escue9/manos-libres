@@ -13,6 +13,7 @@
  */
 
 import { db } from './db.js';
+import * as sesion from './sesion.js';
 
 const PERMISOS = {
   admin: {
@@ -175,13 +176,46 @@ export const auth = {
   /* --- login --- */
 
   /**
+   * El PIN abre el aparato; la sesión de Supabase dice quién es ante el
+   * servidor. Tienen que ser la misma persona.
+   *
+   * Desde la Fase 5 §4.1 el PIN dejó de ser la credencial y pasó a desbloquear
+   * la sesión que ya está guardada en el dispositivo (un aparato, una persona).
+   * Si alguien tipea su PIN en el celular de otra, el PIN matchea —está en la
+   * misma base local— pero todo lo que escriba viajaría firmado por la dueña
+   * del aparato: sus jornadas, su rol, su nombre en cada pedido. Acá se corta.
+   *
+   * La comparación es contra lo ÚLTIMO que dijo el servidor, cacheado. Tiene
+   * que funcionar sin señal (regla 3), así que no se pregunta, se recuerda.
+   * Un dispositivo que nunca se conectó no tiene identidad y el PIN manda solo,
+   * igual que en las fases 0 a 4.
+   */
+  async _verificarDispositivo(rolLocal, trabajadoraId) {
+    let yo = null;
+    try { yo = await sesion.identidad(); } catch { return; }
+    if (!yo?.rol) return;                       // sin identidad conocida, no hay nada que comparar
+
+    if (yo.rol === 'inactiva') {
+      throw new Error('Esta cuenta está dada de baja. Hablá con administración.');
+    }
+    if (yo.rol !== rolLocal) {
+      throw new Error(`Este dispositivo tiene la sesión de ${PERMISOS[yo.rol]?.etiqueta || 'otra persona'}. Entrá desde el tuyo.`);
+    }
+    if (yo.trabajadoraId && trabajadoraId && yo.trabajadoraId !== trabajadoraId) {
+      throw new Error('Este dispositivo tiene la sesión de otra persona. Entrá desde el tuyo.');
+    }
+  },
+
+  /**
    * Prueba el PIN contra el admin y contra cada trabajadora.
-   * Devuelve la sesión si coincide, null si no.
+   * Devuelve la sesión si coincide, null si no. Tira si el PIN es correcto
+   * pero el dispositivo es de otra persona.
    */
   async ingresar(pin) {
     const h = await hashPin(pin);
 
     if (h === await db.getConfig('admin_pin')) {
+      await this._verificarDispositivo('admin', null);
       this._setSesion({
         rol: 'admin',
         trabajadoraId: null,
@@ -193,6 +227,7 @@ export const auth = {
     const trabajadoras = await db.from('trabajadora').select().eq('activa', true);
     const t = trabajadoras.find((x) => x.pin_acceso && x.pin_acceso === h);
     if (t) {
+      await this._verificarDispositivo('trabajadora', t.id);
       this._setSesion({ rol: 'trabajadora', trabajadoraId: t.id, nombre: t.nombre });
       return { rol: 'trabajadora', trabajadora: t };
     }

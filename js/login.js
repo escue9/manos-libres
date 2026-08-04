@@ -64,6 +64,11 @@ export function mostrarLogin() {
       return { t: 'Repetilo', s: 'Para confirmar que no te equivocaste' };
     }
 
+    /**
+     * `error` puede ser `true` (PIN incorrecto) o el motivo real.
+     * El PIN correcto en el celular de otra persona no es un PIN incorrecto, y
+     * decirle eso a alguien que lo tipeó bien lo manda a probar tres veces más.
+     */
     function pintar(error = false) {
       const { t, s } = textos();
       root.innerHTML = `
@@ -77,7 +82,8 @@ export function mostrarLogin() {
               `<i class="${i < pin.length ? 'on' : ''}${error ? ' err' : ''}"></i>`).join('')}
           </div>
 
-          <div class="login__msg${error ? ' err' : ''}">${error ? 'PIN incorrecto' : '&nbsp;'}</div>
+          <div class="login__msg${error ? ' err' : ''}">${
+            error ? esc(error === true ? 'PIN incorrecto' : error) : '&nbsp;'}</div>
 
           <div class="numpad">
             ${[1,2,3,4,5,6,7,8,9].map((d) => `<button data-d="${d}">${d}</button>`).join('')}
@@ -108,11 +114,12 @@ export function mostrarLogin() {
       pintar();
     }
 
-    function fallar() {
+    function fallar(motivo = true) {
       vibrar(60);
-      pintar(true);
+      pintar(motivo);
       pin = '';
-      setTimeout(() => pintar(false), 700);
+      // Un motivo hay que poder leerlo: dos segundos y medio, no setecientos.
+      setTimeout(() => pintar(false), motivo === true ? 700 : 2500);
     }
 
     async function confirmar() {
@@ -124,7 +131,14 @@ export function mostrarLogin() {
         return cerrar();
       }
 
-      const ok = await auth.ingresar(pin);
+      let ok;
+      try {
+        ok = await auth.ingresar(pin);
+      } catch (e) {
+        // El PIN estaba bien pero el dispositivo es de otra persona, o la
+        // cuenta está dada de baja. Se dice cuál de las dos.
+        return fallar(e.message);
+      }
       if (!ok) return fallar();
       cerrar();
     }
