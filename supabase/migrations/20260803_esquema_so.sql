@@ -375,12 +375,16 @@ end $$;
 -- la consola del navegador", no algo que pase sin querer. Pero la regla 8 dice
 -- que no los ve, y hoy no es el servidor el que lo garantiza.
 --
--- Se arregla con vistas sin las columnas de costo, y ahí aparece el problema
+-- Se arregla con vistas sin las columnas de costo, y ahí aparecía el problema
 -- de fondo: la venta rápida que corre una trabajadora escribe
--- `pedido_item.costo_unitario` como snapshot. Si no puede leer costos, no lo
--- puede calcular. Las dos salidas son un trigger que llene el snapshot del
--- lado del servidor, o que la venta rápida deje de estar disponible sin
--- conexión. Es una decisión de cómo trabaja la cocina, no de código.
+-- `pedido_item.costo_unitario` como snapshot; si no puede leer costos, no lo
+-- puede calcular. DECIDIDO en 20260804_costos_servidor.sql: el snapshot lo
+-- llena el servidor. La venta rápida sigue andando sin conexión, que es la
+-- regla 3, y la cocina ya no necesita leer un costo para vender.
+--
+-- Queda pendiente solo la otra mitad —el `revoke` de las columnas y las vistas
+-- para la administración—, que va junto con el motor Supabase de db.js porque
+-- rompe `select *`. Está explicado al final de ese archivo.
 
 do $$
 declare t text;
