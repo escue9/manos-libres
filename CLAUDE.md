@@ -19,7 +19,9 @@ await db.from('pedido').select().eq('estado', 'pendiente')
 await db.from('pedido').insert({ ... })
 ```
 
-Hoy por debajo hay IndexedDB. En la fase 5 se cambia la implementación interna de `db.js` por el cliente de Supabase y **ningún módulo se toca**. Si escribís `indexedDB` directo en un módulo, rompiste la migración.
+Por debajo hay IndexedDB, y en la fase 5 se decidió que **se queda**. La idea original era cambiarle el motor por el cliente de Supabase, pero eso choca de frente con la regla 3: un `db.js` que sea un cliente REST no abre sin internet. Lo que hay en cambio es `sync.js`, un replicador al lado: IndexedDB es la fuente de verdad del dispositivo y Postgres es el espejo.
+
+El efecto para quien escribe un módulo es el mismo, y más fuerte: **ningún módulo se toca ni se entera de que existe un servidor**. Si escribís `indexedDB` directo en un módulo, te quedás afuera del sync.
 
 ### 2. Vanilla puro
 
@@ -92,6 +94,8 @@ Hereda la marca de Manos Libres (ver `.claude/skills/manos-libres-design/SKILL.m
 ├── supabase/migrations/   esquema del canal web
 └── js/
     ├── db.js              capa de datos — API igual a Supabase
+    ├── sync.js            replicador: empuja y trae contra Postgres
+    ├── sesion.js          la sesión de Supabase del dispositivo
     ├── nube.js            canal web: catálogo y buzón en Supabase
     ├── qr.js              generador de QR, sin dependencias
     ├── state.js           estado en memoria + eventos
@@ -132,7 +136,14 @@ Al portar un mockup:
 - [x] **Fase 2 — Ventas** · clientes, pedidos, agenda de entregas, venta rápida, cobros
 - [x] **Fase 3 — Equipo** · trabajadoras, jornadas, liquidación, vista por rol
 - [x] **Fase 4 — Caja** · movimientos, cierre semanal, rentabilidad, exportables
-- [ ] **Fase 5 — Nube** · Supabase, RLS, sync, deploy en Vercel
+- [ ] **Fase 5 — Nube** · Supabase, RLS, sync, deploy en Vercel — ver `docs/FASE-5.md`
+  - [x] §1 y §2 · las 18 tablas en Postgres, con RLS
+  - [x] §3 · el costo lo pone el servidor
+  - [x] §4.1 · identidad: el PIN desbloquea, Supabase autentica
+  - [x] §4.2 · el replicador (`sync.js`)
+  - [x] §4.3 · los costos dejan de leerse desde la cocina
+  - [ ] el enganche en la interfaz — el replicador anda pero no lo llama nadie
+  - [ ] deploy en Vercel
 
 **Canal de venta online** (`docs/BRIEF-CANAL-ONLINE.md`) — hecho fuera de orden
 porque no dependía de la Fase 4. Adelanta parte de la Fase 5: catálogo público,
