@@ -1,15 +1,14 @@
-# Fase 5 — Nube · en curso
+# Fase 5 — Nube · cerrada
 
 El esquema del SO vive en Postgres con RLS, los costos los pone el servidor y
-ya no se leen desde la cocina, cada persona tiene su usuario, y hay un
-replicador que empuja y trae. **`db.js` sigue siendo IndexedDB** y eso ahora es
-una decisión y no una etapa: ver §4.2.
+ya no se leen desde la cocina, cada persona tiene su usuario, hay un
+replicador que empuja y trae y ya está enganchado en la interfaz, y el SO vive
+en `https://manos-libres-app.vercel.app`. **`db.js` sigue siendo IndexedDB** y
+eso ahora es una decisión y no una etapa: ver §4.2.
 
 El orden fue a propósito: primero se dejó al servidor capaz de sostener las
 reglas solo, después se lo conectó. Al revés, el día que la app empezara a leer
 de la nube ya sería tarde para descubrir que el servidor no garantizaba nada.
-
-Lo que falta para cerrar la fase es el enganche en la interfaz y el deploy.
 
 ---
 
@@ -327,22 +326,67 @@ lo sostiene —que la lectura de esas tablas siga abierta para todo el equipo—
 queda escrita en la migración, porque el día que alguna se restrinja por fila la
 restricción hay que repetirla adentro de la vista.
 
+### §4.4 — El enganche en la interfaz
+
+El replicador de §4.2 y las políticas de §4.1 quedaron probados contra
+Postgres, pero hasta acá no los llamaba nadie: no había pantalla para que
+administración cargue el `email` y el `rol` de cada persona, y `sync.js` no lo
+disparaba ni un botón.
+
+**La identidad, del lado de la app.** `guardarTrabajadora()` acepta `email` y
+`rol`, y valida los tres casos que importan: forma de mail, que no se repita
+entre dos personas —case-insensitive, igual que el índice de Postgres— y que
+el rol sea uno de los tres. Repetir ese chequeo en el cliente no es
+redundante: el servidor lo rechazaría igual, pero recién cuando corra el
+sync, horas después y lejos de quien se equivocó.
+
+Dos cosas que no eran obvias:
+
+- `undefined` es "no lo toques" y `''` es "borralo". Con default `''`,
+  cualquier llamada que no conociera el campo le borraba el mail a la persona
+  de refilón al guardar otra cosa, y la dejaba sin usuario del otro lado.
+- el mail se normaliza a minúscula al guardar y no solo al comparar. El
+  índice de Postgres es sobre `lower(email)`; guardarlo como lo tipearon deja
+  dos verdades del mismo mail según de qué lado se mire.
+
+De paso apareció una fuga de la regla 8: `state.recortarTrabajadora()` no
+sacaba `email` ni `rol`, así que quedaban en `state.trabajadoras` para
+cualquier rol. La pantalla los esconde detrás de `esAdmin()`, pero esconder al
+renderizar no alcanza —es el mismo argumento que esa función ya usa para la
+tarifa—: desde la consola una trabajadora veía el mail y el rol de sus
+compañeras.
+
+**El replicador, enganchado.** Sincroniza al abrir, al volver la señal y a
+mano desde el menú. Las dos primeras son calladas, y es lo importante del
+enganche: en la cocina del CIC estar sin internet es lo normal, no un error
+que haya que gritarle a nadie. La app abre igual y al instante (regla 3) y el
+fallo va a `console.warn`. La tercera sí habla, porque ahí lo pidieron a
+propósito: el error va escrito en el modal y no en un toast, que un "Supabase
+respondió 401" no se lee en dos segundos y medio.
+
+Decisiones del enganche que tampoco eran obvias:
+
+- el indicador se apaga si el dispositivo no tiene sesión. Sin sesión TODO
+  está pendiente para siempre, y un número que nunca baja no informa, molesta.
+  La explicación va al menú, que es donde se puede hacer algo.
+- la vuelta callada solo re-renderiza si algo bajó. Refrescar la pantalla
+  debajo de las manos de alguien que está cargando un pedido, para no mostrar
+  nada nuevo, es peor que esperar.
+- un flag global contra los tres disparadores: dos push simultáneos se pisan
+  la cola.
+- `sesion.js` nunca había entrado al `SHELL` del service worker —ya faltaba
+  antes de esto—, y ahora `app.js` lo importa. Sin eso el primer arranque en
+  modo avión se quedaba sin el módulo de sesión.
+
+De paso, el aviso del backup decía "hasta que el sistema esté en la nube, es
+la única copia que existe". Ya no es cierto, pero el backup sigue haciendo
+falta por otro motivo y ahora lo dice: la nube es un espejo, no un respaldo.
+
 ---
 
-## Lo que falta
+## El deploy en Vercel
 
-### El enganche en la interfaz
-
-El replicador anda y está probado, pero **todavía no lo llama nadie**: no hay
-botón de sincronizar, ni sincronización al abrir, ni indicador de cuántas filas
-esperan. `sync.pendientes()` está justamente para eso.
-
-Falta también la pantalla con la que administración carga el `email` y el `rol`
-de cada persona. Hasta que exista, aparear a alguien se hace a mano.
-
-### El deploy en Vercel
-
-Hecho. **https://manos-libres-app.vercel.app** sirve el SO en la raíz y el
+**https://manos-libres-app.vercel.app** sirve el SO en la raíz y el
 catálogo público en `/catalogo/` — la misma URL que espera `nube.enlacePublico()`.
 
 Ese nombre de proyecto ya existía en la cuenta, pero apuntaba a un prototipo
@@ -363,4 +407,7 @@ en un sitio de este tamaño y sin nada sensible adentro (la anon key de
 
 Esto destraba lo que quedó colgado de las fases anteriores: la instalación
 como PWA y el arranque con modo avión ahora se pueden verificar con HTTPS
-real, y el catálogo público tiene dónde vivir para generar el QR.
+real, y el catálogo público tiene dónde vivir para generar el QR. Esa
+verificación —instalar y probar en modo avión desde un celular— sigue
+pendiente y son los checkboxes abiertos en `docs/FASE-0.md` y
+`docs/BRIEF-CODE.md`.

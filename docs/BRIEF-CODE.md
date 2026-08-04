@@ -82,10 +82,11 @@ Son referencia visual, no código a copiar. Ver las reglas de portado en `CLAUDE
 - [x] ~~**Falta implementar la conversión de unidades** (g↔kg, ml↔l) en
       `calc.costoProducto()`~~ — resuelto en la Fase 1, ver `docs/FASE-1.md`.
 
-### Bloqueado hasta el deploy en Vercel
+### Verificar ahora que hay deploy en Vercel
 
-Estas dos cosas **no se pueden verificar en desarrollo local** y quedan pendientes
-hasta que haya una URL con HTTPS:
+Estas dos cosas **no se podían verificar en desarrollo local** — hacía falta una
+URL con HTTPS, y ya existe (`https://manos-libres-app.vercel.app`, Fase 5).
+Falta probarlas:
 
 - [ ] Que la PWA se instale como app en el celular
 - [ ] Que abra en modo avión sin errores

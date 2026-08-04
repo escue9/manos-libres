@@ -81,8 +81,9 @@ No se puede verificar en desarrollo local: el navegador registra service workers
 y expone `crypto.subtle` **solo en contextos seguros** (HTTPS o `localhost`).
 Desde el celular por IP de red local sobre HTTP, ninguna de las dos cosas existe.
 
-Queda para cuando se publique en Vercel. `js/login.js` ya detecta el caso y avisa
-en pantalla en vez de fallar en silencio.
+Ya está publicado en `https://manos-libres-app.vercel.app` (Fase 5), así que
+esto ya se puede probar — falta hacerlo. `js/login.js` ya detecta el caso y
+avisa en pantalla en vez de fallar en silencio.
 
 Si al probarlo falla, el sospechoso es el `SHELL` de `sw.js`: que falte un archivo
 o que `CACHE_VERSION` haya quedado vieja.
