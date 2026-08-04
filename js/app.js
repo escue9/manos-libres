@@ -9,6 +9,7 @@ import { ui } from './ui.js';
 import { mostrarLogin } from './login.js';
 import * as sesion from './sesion.js';
 import * as sync from './sync.js';
+import { vigilarActualizaciones } from './actualizacion.js';
 
 import * as produccion   from './modules/produccion.js';
 import * as pedidos      from './modules/pedidos.js';
@@ -379,6 +380,10 @@ async function init() {
   // Cuando vuelve la señal se aprovecha sola: nadie va a acordarse de entrar al
   // menú a sincronizar justo en el minuto en que el CIC recupera internet.
   window.addEventListener('online', sincronizarCallado);
+
+  // Antes del login: si hay una versión nueva esperando, que el aviso esté
+  // desde el arranque y no después de que tipeen el PIN.
+  vigilarActualizaciones();
 
   await arrancarSesion();
 

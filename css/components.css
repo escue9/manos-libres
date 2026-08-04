@@ -642,3 +642,30 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
   font-size: .88rem; box-shadow: 0 6px 20px rgb(0 0 0 / .5);
 }
 .toast--err { border-color: var(--danger); color: var(--danger); }
+
+/* ---------- Aviso de versión nueva ---------- */
+
+/* No es un toast: no se va solo. Hay que poder ignorarlo y seguir cargando
+   ventas, y encontrarlo de nuevo cuando haya un rato para actualizar. */
+.aviso-version {
+  position: fixed; left: var(--sp-3); right: var(--sp-3);
+  bottom: calc(90px + var(--safe-b));
+  z-index: 60; display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2); border: 1px solid var(--caja); border-radius: var(--r-sm);
+  font-size: .88rem; box-shadow: 0 6px 20px rgb(0 0 0 / .5);
+}
+
+/* El texto empuja los botones a la derecha y se recorta si hace falta: a 360px
+   "Actualizar" tiene que entrar entero, es lo único que hay que tocar. */
+.aviso-version span { flex: 1; min-width: 0; }
+
+.aviso-version__x {
+  flex: none; width: 32px; height: 32px;
+  background: none; border: none; color: var(--text-faint);
+  font-size: 1rem; line-height: 1; cursor: pointer;
+}
+
+/* El botón del aviso va más chico que el resto: comparte una barra angosta con
+   el texto y la cruz, y a 360px un .btn de alto completo la parte en dos. */
+.aviso-version .btn { flex: none; padding: var(--sp-2) var(--sp-3); font-size: .85rem; }

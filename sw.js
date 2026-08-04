@@ -6,9 +6,15 @@
  * Los DATOS no pasan por acá — viven en IndexedDB vía js/db.js.
  *
  * Subí CACHE_VERSION en cada deploy o los usuarios quedan con la versión vieja.
+ *
+ * El worker nuevo NO se adelanta solo: se instala, espera, y la app avisa para
+ * que la persona toque "Actualizar" (js/actualizacion.js). Con skipWaiting()
+ * automático —que es lo que había— el worker nuevo tomaba el control en medio
+ * de la sesión: la pantalla seguía con los módulos viejos ya cargados y lo que
+ * pidiera de ahí en más lo atendía el cache nuevo. Media app de cada versión.
  */
 
-const CACHE_VERSION = 'cocina-cic-v7';
+const CACHE_VERSION = 'cocina-cic-v8';
 
 const SHELL = [
   './',
@@ -23,6 +29,7 @@ const SHELL = [
   './js/calc.js',
   './js/auth.js',
   './js/ui.js',
+  './js/actualizacion.js',
   './js/sesion.js',
   './js/sync.js',
   './js/nube.js',
@@ -45,10 +52,21 @@ const SHELL = [
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE_VERSION)
-      // addAll falla entero si un recurso falla; toleramos faltantes en desarrollo
-      .then((c) => Promise.allSettled(SHELL.map((u) => c.add(u))))
-      .then(() => self.skipWaiting())
+      // addAll falla entero si un recurso falla; toleramos faltantes en desarrollo.
+      //
+      // `cache: 'reload'` para saltear el caché HTTP del navegador: sin eso, el
+      // precache de una versión nueva puede guardar la copia vieja que el
+      // navegador todavía tiene por Cache-Control, y el deploy no llega igual.
+      .then((c) => Promise.allSettled(
+        SHELL.map((u) => c.add(new Request(u, { cache: 'reload' })))
+      ))
+    // Sin skipWaiting(): acá se queda esperando hasta que la app lo mande pasar.
   );
+});
+
+// El único que puede darle paso es la app, cuando la persona toca "Actualizar".
+self.addEventListener('message', (e) => {
+  if (e.data?.tipo === 'actualizar') self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {

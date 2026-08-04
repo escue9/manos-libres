@@ -59,9 +59,9 @@
 
 <script type="module" src="js/app.js"></script>
 <script>
-  if ('serviceWorker' in navigator) {
-    addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
-  }
+  /* El registro del service worker se mudó a js/actualizacion.js: registrar es
+     la mitad fácil, y la otra mitad —enterarse de que hay una versión nueva y
+     aplicarla cuando la persona quiera— necesita el mismo objeto de registro. */
 </script>
 </body>
 </html>
