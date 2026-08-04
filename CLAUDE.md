@@ -142,7 +142,7 @@ Al portar un mockup:
   - [x] §4.1 · identidad: el PIN desbloquea, Supabase autentica
   - [x] §4.2 · el replicador (`sync.js`)
   - [x] §4.3 · los costos dejan de leerse desde la cocina
-  - [ ] el enganche en la interfaz — el replicador anda pero no lo llama nadie
+  - [x] §4.4 · el enganche en la interfaz — sync al abrir, al volver la señal y a mano
   - [ ] deploy en Vercel
 
 **Canal de venta online** (`docs/BRIEF-CANAL-ONLINE.md`) — hecho fuera de orden

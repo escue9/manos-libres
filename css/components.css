@@ -22,6 +22,34 @@
   -webkit-text-fill-color: transparent;
 }
 
+/* Cuánto falta subir a la nube.
+   A propósito NO es un cartel rojo: quedarse sin señal en el CIC es lo normal,
+   así que el indicador tiene que decir "hay tres ventas sin viajar", no "algo se
+   rompió". El botón mide 48px para poder tocarse con una mano; lo que se ve es
+   la pastilla de adentro, chica. */
+.sync-pin {
+  flex: none;
+  min-height: var(--tap);
+  display: inline-flex; align-items: center;
+  padding: 0 var(--sp-1);
+  border: none; background: transparent;
+}
+
+.sync-pin__pastilla {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text-dim);
+  font-family: var(--font-mono); font-size: .74rem; font-weight: 700;
+  transition: background .12s;
+}
+.sync-pin__pastilla::before {
+  content: ''; flex: none;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--caja);
+}
+.sync-pin:active .sync-pin__pastilla { background: var(--surface-2); }
+
 .view { padding: var(--sp-4); display: none; }
 .view.active { display: block; }
 

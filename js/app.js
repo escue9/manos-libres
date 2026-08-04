@@ -7,6 +7,8 @@ import { state } from './state.js';
 import { auth } from './auth.js';
 import { ui } from './ui.js';
 import { mostrarLogin } from './login.js';
+import * as sesion from './sesion.js';
+import * as sync from './sync.js';
 
 import * as produccion   from './modules/produccion.js';
 import * as pedidos      from './modules/pedidos.js';
@@ -54,6 +56,199 @@ async function irA(tab) {
 
   await TABS[tab].render(vista);
   window.scrollTo(0, 0);
+
+  // Sin await: el número del header no puede hacer esperar a la pantalla.
+  refrescarPendientes();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Sincronización                                                     */
+/* ------------------------------------------------------------------ */
+
+/** Una sola vuelta a la vez: dos push simultáneos se pisan la cola. */
+let sincronizando = false;
+
+/**
+ * La vuelta que no molesta a nadie.
+ *
+ * Quedarse sin señal en la cocina del CIC es lo normal, no una falla. Si esto
+ * avisara, avisaría todos los días y se aprendería a ignorarlo — y de paso
+ * taparía el aviso del día que sí importa. Lo que no sube queda con su
+ * `sync_status` puesto y se va en la próxima vuelta, que es exactamente para lo
+ * que sync.js lo guarda.
+ */
+async function sincronizarCallado() {
+  if (sincronizando) return;
+
+  const est = await sesion.estado().catch(() => null);
+  if (!est?.conectado) return;
+
+  sincronizando = true;
+  try {
+    const r = await sync.sincronizar();
+    // Se re-renderiza solo si algo BAJÓ. Refrescar la vista de abajo de las
+    // manos de alguien que está cargando un pedido, para no mostrar nada nuevo,
+    // es peor que esperar a la próxima.
+    if (r.bajadas) await state.invalidar();
+  } catch (e) {
+    console.warn('Sync en segundo plano:', e.message);
+  } finally {
+    sincronizando = false;
+    refrescarPendientes();
+  }
+}
+
+/**
+ * El indicador del header.
+ *
+ * Un dispositivo sin sesión no tiene a dónde subir: TODO le queda pendiente
+ * para siempre, y un número que nunca baja no informa, molesta. En ese caso el
+ * indicador se apaga y la explicación va al menú, que es donde se puede hacer
+ * algo al respecto.
+ */
+async function refrescarPendientes() {
+  const pin = document.getElementById('sync-pendiente');
+  if (!pin) return;
+
+  try {
+    const est = await sesion.estado();
+    const { filas, borrados } = est.conectado
+      ? await sync.pendientes()
+      : { filas: 0, borrados: 0 };
+
+    const total = filas + borrados;
+    pin.classList.toggle('hidden', total === 0);
+    document.getElementById('sync-pendiente-n').textContent = total > 99 ? '99+' : String(total);
+    pin.setAttribute('aria-label',
+      `${total} ${total === 1 ? 'registro' : 'registros'} sin subir. Tocá para ver el detalle.`);
+  } catch {
+    // Contar lo pendiente nunca puede ser el motivo de que algo se rompa.
+    pin.classList.add('hidden');
+  }
+}
+
+/** Cuándo fue la última vuelta, sin precisión falsa. */
+function cuando(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d.getTime())) return 'nunca';
+
+  const min = Math.round((Date.now() - d.getTime()) / 60000);
+  if (min < 1)  return 'recién';
+  if (min < 60) return `hace ${min} min`;
+
+  const p = (n) => String(n).padStart(2, '0');
+  const hora = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return ui.hoyISO(d) === ui.hoyISO() ? `hoy ${hora}` : `${ui.fecha(d)} a las ${hora}`;
+}
+
+function textoPendiente(filas, borrados) {
+  if (!filas && !borrados) return 'Todo lo de este dispositivo ya está en la nube.';
+  const partes = [];
+  if (filas)    partes.push(`${filas} ${filas === 1 ? 'registro' : 'registros'}`);
+  if (borrados) partes.push(`${borrados} ${borrados === 1 ? 'borrado' : 'borrados'}`);
+  return `${partes.join(' y ')} esperando para subir.`;
+}
+
+/**
+ * "Failed to fetch" es lo que dice el navegador cuando no hay red, y no se le
+ * puede pedir a nadie que lo traduzca parada en la cocina. El resto de los
+ * errores sí se muestran tal cual: un 401 o un 42501 hay que poder leerlos
+ * enteros para saber a quién llamar.
+ */
+function errorEnCriollo(e) {
+  const msg = e?.message || '';
+  if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+    return 'No se pudo llegar a la nube. Probá de nuevo cuando vuelva internet: mientras tanto no se pierde nada.';
+  }
+  return msg || 'No se pudo sincronizar.';
+}
+
+/** Qué pasó en la vuelta, para el toast del botón. */
+function resumenSync(r) {
+  const partes = [];
+  if (r.subidas)  partes.push(`${r.subidas} ${r.subidas === 1 ? 'subido' : 'subidos'}`);
+  if (r.borradas) partes.push(`${r.borradas} ${r.borradas === 1 ? 'borrado' : 'borrados'}`);
+  if (r.bajadas)  partes.push(`${r.bajadas} ${r.bajadas === 1 ? 'bajado' : 'bajados'}`);
+  return partes.length ? `Sincronizado · ${partes.join(' · ')}` : 'Ya estaba todo al día';
+}
+
+/**
+ * El bloque de sincronización del menú.
+ *
+ * Se pinta DESPUÉS de abrir el modal: contar lo pendiente son diecisiete
+ * lecturas a IndexedDB y el menú tiene que abrir en el acto.
+ *
+ * Lo que se muestra —cuánto falta subir y de cuándo es la última vuelta— no es
+ * información de nadie en particular: no hay costos, ni márgenes, ni datos de
+ * otra trabajadora. Sincronizar es de cualquier rol (regla 8 intacta).
+ */
+async function pintarSync(cont) {
+  const est = await sesion.estado();
+
+  if (!est.conectado) {
+    cont.innerHTML = `
+      <div class="bloque__titulo">Sincronización</div>
+      <p class="faint" style="margin:0">
+        ${est.configurado
+          ? 'La sesión de este dispositivo se cerró o venció, así que nada está viajando a la nube. '
+            + 'Volvé a entrar desde Pedidos → Catálogo online.'
+          : 'Este dispositivo no está conectado a la nube. Todo se guarda acá y no viaja a ningún lado: '
+            + 'hasta que se conecte, la copia de seguridad es la única que existe.'}
+      </p>`;
+    return;
+  }
+
+  const { filas, borrados } = await sync.pendientes();
+  const ultima = await db.getConfig('sync_ultima_vuelta', '');
+
+  cont.innerHTML = `
+    <div class="bloque__titulo">Sincronización</div>
+    <p style="margin:0 0 var(--sp-1);font-size:.9rem">${textoPendiente(filas, borrados)}</p>
+    <p class="faint" style="margin:0 0 var(--sp-3)">Última vez: ${cuando(ultima)}</p>
+    <p class="faint hidden" id="m-sync-error" style="margin:0 0 var(--sp-3);color:var(--danger)"></p>
+    <button class="btn btn--block" id="m-sync-ya">Sincronizar ahora</button>`;
+
+  cont.querySelector('#m-sync-ya')
+    .addEventListener('click', (e) => sincronizarAhora(e.currentTarget, cont));
+}
+
+/**
+ * La vuelta que sí habla. Es la contracara de sincronizarCallado(): acá alguien
+ * la pidió a propósito, así que se cuenta cómo fue y, si falló, por qué —
+ * escrito en el modal y no en un toast, porque un error de Supabase es largo y
+ * no se alcanza a leer en dos segundos y medio.
+ */
+async function sincronizarAhora(btn, cont) {
+  const error = cont.querySelector('#m-sync-error');
+  const fallar = (msg) => {
+    error.textContent = msg;
+    error.classList.remove('hidden');
+    btn.disabled = false;
+    btn.textContent = 'Sincronizar ahora';
+  };
+
+  error.classList.add('hidden');
+  btn.disabled = true;
+  btn.textContent = 'Sincronizando…';
+
+  if (sincronizando) return fallar('Ya hay una sincronización en curso. Esperá unos segundos.');
+
+  sincronizando = true;
+  ui.bloquearModal(true);
+  try {
+    const r = await sync.sincronizar();
+    ui.bloquearModal(false);
+    ui.cerrarModal();
+    ui.toast(resumenSync(r));
+    if (r.bajadas) await state.invalidar();
+  } catch (e) {
+    console.error(e);
+    ui.bloquearModal(false);
+    fallar(errorEnCriollo(e));
+  } finally {
+    sincronizando = false;
+    refrescarPendientes();
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,12 +261,17 @@ function abrirMenu() {
     <h3>${ui.esc(auth.nombre || p.etiqueta)}</h3>
     <p class="faint" style="margin-top:calc(var(--sp-1) * -1)">${p.etiqueta}</p>
 
+    <div class="bloque" id="m-sync">
+      <div class="bloque__titulo">Sincronización</div>
+      <p class="faint" style="margin:0">Viendo cómo viene…</p>
+    </div>
+
     <div class="stack" style="margin-top:var(--sp-4)">
       ${p.exportar ? `
         <button class="btn btn--block" id="m-backup">Descargar copia de seguridad</button>
         <p class="faint" style="margin:0">
-          Guarda todos los datos en un archivo. Hacelo cada semana:
-          hasta que el sistema esté en la nube, es la única copia que existe.
+          Guarda todos los datos en un archivo. Seguí haciéndolo cada semana:
+          la nube es un espejo, no un respaldo. Lo que se borra acá se borra allá.
         </p>
         <label class="btn btn--block" for="m-archivo">Restaurar desde una copia</label>
         <input type="file" id="m-archivo" accept="application/json,.json" class="hidden">
@@ -81,6 +281,7 @@ function abrirMenu() {
       <button class="btn btn--block btn--danger" id="m-salir">Cerrar sesión</button>
     </div>
   `, (root) => {
+    pintarSync(root.querySelector('#m-sync'));
     root.querySelector('#m-backup')?.addEventListener('click', descargarBackup);
     root.querySelector('#m-archivo')?.addEventListener('change', (e) => restaurarBackup(e.target.files[0]));
     root.querySelector('#m-salir').addEventListener('click', async () => {
@@ -170,11 +371,21 @@ async function init() {
   });
 
   document.getElementById('btn-menu').addEventListener('click', abrirMenu);
+  document.getElementById('sync-pendiente').addEventListener('click', abrirMenu);
 
   // Re-render del tab activo cuando cambian los datos
   state.on('cambio', () => irA(state.tabActual));
 
+  // Cuando vuelve la señal se aprovecha sola: nadie va a acordarse de entrar al
+  // menú a sincronizar justo en el minuto en que el CIC recupera internet.
+  window.addEventListener('online', sincronizarCallado);
+
   await arrancarSesion();
+
+  // Recién acá hay sesión, y va sin await a propósito: la app ya está en
+  // pantalla y una vuelta del replicador no puede demorar el primer render
+  // (regla 3). Si no hay internet, no pasa nada y nadie se entera.
+  sincronizarCallado();
 }
 
 init().catch((e) => {

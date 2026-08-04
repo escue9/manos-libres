@@ -23,6 +23,11 @@
     <div class="app-title">Cocina CIC</div>
     <div class="faint" id="semana-label">—</div>
   </div>
+  <!-- Lo que todavía no viajó a la nube. Se enciende solo cuando hay algo que
+       decir, y toca para abrir el menú, donde está el detalle. -->
+  <button class="sync-pin hidden" id="sync-pendiente" aria-label="Registros sin subir">
+    <span class="sync-pin__pastilla" id="sync-pendiente-n">0</span>
+  </button>
   <button class="btn btn--ghost" id="btn-menu" aria-label="Menú">···</button>
 </header>
 
