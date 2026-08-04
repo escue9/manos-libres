@@ -217,5 +217,17 @@ as $$
   where t.auth_user_id = auth.uid();
 $$;
 
+-- `quien_soy()` es de las pocas funciones que SÍ se exponen: es la única forma
+-- que tiene el cliente de saber de quién es la sesión que tiene guardada, y
+-- solo devuelve la fila del que pregunta.
 grant execute on function public.quien_soy() to authenticated;
 revoke execute on function public.quien_soy() from public, anon;
+
+-- Las de trigger, en cambio, no son API. Llamarlas sueltas ya moría con
+-- "trigger functions can only be called as triggers", pero no tienen por qué
+-- estar publicadas en /rest/v1/rpc.
+revoke execute on function
+  public.aparear_usuario_nuevo(),
+  public.aparear_trabajadora(),
+  public.grabar_rol_de_trabajadora()
+from public, anon, authenticated;

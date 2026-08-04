@@ -30,7 +30,12 @@ let llamadas = [];
 /** tabla → Map(id → fila). El servidor. */
 const remoto = new Map();
 
-const tablaDe = (u) => (u.match(/\/rest\/v1\/([a-z_]+)/) || [])[1];
+/**
+ * `insumo_v` y `insumo` son el mismo dato: la vista es por dónde se lee cuando
+ * la tabla tiene columnas de costo. El Postgres de mentira las guarda juntas.
+ */
+const tablaDe = (u) => ((u.match(/\/rest\/v1\/([a-z_]+)/) || [])[1] || '').replace(/_v$/, '');
+const relacionDe = (u) => (u.match(/\/rest\/v1\/([a-z_]+)/) || [])[1];
 const filasDe = (tabla) => remoto.get(tabla) || remoto.set(tabla, new Map()).get(tabla);
 
 globalThis.fetch = async (url, opciones = {}) => {
@@ -126,6 +131,19 @@ limpiar();
 r = await sync.sincronizar();
 t('y sube en la vuelta siguiente', r.subidas === 1);
 t('con el valor nuevo', filasDe('insumo').get(insumo.id).stock_actual === 999);
+
+/* ================================================================== */
+console.log('\n── los costos se leen por la vista, no por la tabla');
+
+limpiar();
+await sync.sincronizar();
+const leidas = llamadas.filter((l) => l.metodo === 'GET').map((l) => relacionDe(l.url));
+t('el insumo se baja de insumo_v', leidas.includes('insumo_v'));
+t('y nunca de la tabla cruda, que devuelve 42501', !leidas.includes('insumo'));
+t('el pedido, que no tiene costos, sigue derecho', leidas.includes('pedido'));
+t('pero el pedido_item va por su vista', leidas.includes('pedido_item_v'));
+t('subir sigue yendo a la tabla',
+  llamadas.filter((l) => l.metodo === 'POST').every((l) => !/_v(\?|$)/.test(l.url)));
 
 /* ================================================================== */
 console.log('\n── lo que cambió en la nube baja');

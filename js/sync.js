@@ -69,6 +69,28 @@ export const ORDEN = [
 /** Para borrar hay que ir al revés: primero los hijos. */
 const ORDEN_BORRADO = [...ORDEN].reverse();
 
+/**
+ * De dónde se LEE cada tabla. Escribir sigue yendo derecho a la tabla.
+ *
+ * Estas cinco tienen columnas de costo, y desde 20260806_costos_ocultos.sql el
+ * `select *` sobre ellas devuelve 42501 para todo el mundo —administración
+ * incluida—, justamente para que nadie lea de la tabla sin querer. La vista
+ * devuelve la fila completa con el costo en null si quien pregunta no puede
+ * verlo, así que el replicador no necesita saber qué rol tiene: baja lo que le
+ * corresponda y listo.
+ *
+ * Ese null que baja es inofensivo gracias a las guardas del §4.3: cuando este
+ * dispositivo devuelva la fila con el costo en null, el servidor conserva el
+ * que ya tenía.
+ */
+const VISTA = {
+  insumo: 'insumo_v',
+  producto: 'producto_v',
+  pedido_item: 'pedido_item_v',
+  produccion_item: 'produccion_item_v',
+  orden_produccion: 'orden_produccion_v',
+};
+
 /** Desde cuándo pedir cambios, por tabla. */
 const CLAVE_ULTIMO = (tabla) => `sync_ultimo_${tabla}`;
 
@@ -176,7 +198,7 @@ async function traerTabla(tabla) {
   const filtro = desde ? `&updated_at=gt.${encodeURIComponent(desde)}` : '';
 
   const filas = await sesion.pedir(
-    `${tabla}?select=*${filtro}&order=updated_at.asc&limit=${TANDA}`,
+    `${VISTA[tabla] || tabla}?select=*${filtro}&order=updated_at.asc&limit=${TANDA}`,
   ) || [];
 
   if (!filas.length) return { bajadas: 0, hayMas: false };
