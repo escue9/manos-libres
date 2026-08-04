@@ -69,6 +69,19 @@ const PERMISOS = {
   },
 };
 
+/**
+ * Los roles del sistema, en el orden en que se ofrecen.
+ *
+ * Sale de PERMISOS y no de una lista aparte: un rol nuevo se agrega ahí con sus
+ * permisos y aparece solo donde haya que elegirlo. Lo que NO se exporta es
+ * PERMISOS entero — una pantalla que necesita una palabra no tiene por qué
+ * poder leer la tabla de permisos completa.
+ *
+ * El otro lugar donde esta lista está escrita es el CHECK de
+ * `20260805_identidad.sql`. Son dos, y no hay forma de que sean uno solo.
+ */
+export const ROLES = Object.keys(PERMISOS);
+
 const SESION_KEY = 'cocina_cic_sesion';
 const LARGO_PIN = 4;
 
@@ -114,6 +127,11 @@ export const auth = {
 
   puede(accion) { return !!this.permisos[accion]; },
   puedeVer(tab)  { return this.permisos.tabs.includes(tab); },
+
+  /** Cómo se llama un rol en pantalla. `inactiva` y cualquier cosa rara caen al default. */
+  etiquetaRol(rol) { return (PERMISOS[rol] || PERMISOS.trabajadora).etiqueta; },
+
+  rolValido(rol) { return Object.hasOwn(PERMISOS, rol); },
 
   /**
    * Valida un permiso y corta si no lo tiene.

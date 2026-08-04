@@ -17,7 +17,7 @@
 
 import { db } from '../db.js';
 import { state } from '../state.js';
-import { auth } from '../auth.js';
+import { auth, ROLES } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
 
@@ -25,28 +25,23 @@ const DIAS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
 const NOMBRE_DIA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 /**
- * Los tres roles del sistema, en el mismo orden y con las mismas etiquetas que
- * la tabla PERMISOS de auth.js.
+ * Qué implica cada rol, en una línea.
  *
- * Están repetidas acá porque PERMISOS no se exporta. Traerla entera a un módulo
- * de pantalla es peor: dejaría a cualquier vista leyendo la tabla de permisos
- * completa para mostrar una palabra. Si en auth.js aparece un rol nuevo, se
- * agrega también acá y al CHECK de 20260805_identidad.sql — son los tres
- * lugares donde la lista está escrita.
+ * La LISTA de roles y sus etiquetas viven en auth.js, que es donde están los
+ * permisos de verdad; acá queda solo esta ayuda, que es texto de pantalla y no
+ * tiene por qué estar en la capa de permisos. Un rol nuevo en PERMISOS aparece
+ * solo en el select: si se olvidan de escribirle la ayuda, se muestra sin ella
+ * en vez de no aparecer.
  */
-const ROLES = [
-  { id: 'admin',       etiqueta: 'Administración',
-    ayuda: 'Ve todo: costos, márgenes, caja y el equipo completo. Liquida.' },
-  { id: 'trabajadora', etiqueta: 'Trabajadora',
-    ayuda: 'Cocina, vende y cobra. Ve solo sus propias jornadas y su total.' },
-  { id: 'dirigente',   etiqueta: 'Comisión',
-    ayuda: 'Solo lectura de caja y rentabilidad. No opera nada.' },
-];
+const AYUDA_ROL = {
+  admin:       'Ve todo: costos, márgenes, caja y el equipo completo. Liquida.',
+  trabajadora: 'Cocina, vende y cobra. Ve solo sus propias jornadas y su total.',
+  dirigente:   'Solo lectura de caja y rentabilidad. No opera nada.',
+};
 
 const ROL_POR_DEFECTO = 'trabajadora';
 
-const rolDe = (t) => (ROLES.some((r) => r.id === t?.rol) ? t.rol : ROL_POR_DEFECTO);
-const etiquetaRol = (rol) => ROLES.find((r) => r.id === rol)?.etiqueta || 'Trabajadora';
+const rolDe = (t) => (auth.rolValido(t?.rol) ? t.rol : ROL_POR_DEFECTO);
 
 /**
  * Con forma de mail y nada más.
@@ -260,7 +255,7 @@ export async function guardarTrabajadora({
   const mail = tocaEmail ? String(email ?? '').trim().toLowerCase() : null;
   const rolNuevo = tocaRol ? String(rol ?? '').trim() : null;
 
-  if (tocaRol && !ROLES.some((r) => r.id === rolNuevo)) {
+  if (tocaRol && !auth.rolValido(rolNuevo)) {
     throw new Error('Ese rol no existe');
   }
   if (mail) {
@@ -441,7 +436,7 @@ function tarjeta(f, fechas) {
           ${f.trabajadora.activa === false ? '<span class="badge">Ya no trabaja</span>' : ''}
           ${esAdmin() ? `<div class="faint">
             ${ui.money(f.trabajadora.tarifa_dia)} por día ·
-            ${etiquetaRol(rolDe(f.trabajadora))}${f.trabajadora.email ? '' : ' · sin mail'}
+            ${auth.etiquetaRol(rolDe(f.trabajadora))}${f.trabajadora.email ? '' : ' · sin mail'}
           </div>` : ''}
         </div>
         <div class="right">
@@ -658,10 +653,10 @@ function modalTrabajadora(t = null, vista = null) {
           <label for="t-rol">Rol</label>
           <select class="input" id="t-rol">
             ${ROLES.map((r) => `
-              <option value="${r.id}" ${r.id === rolActual ? 'selected' : ''}>${r.etiqueta}</option>
+              <option value="${r}" ${r === rolActual ? 'selected' : ''}>${ui.esc(auth.etiquetaRol(r))}</option>
             `).join('')}
           </select>
-          <span class="faint" id="t-rol-ayuda">${ROLES.find((r) => r.id === rolActual).ayuda}</span>
+          <span class="faint" id="t-rol-ayuda">${ui.esc(AYUDA_ROL[rolActual] || '')}</span>
         </div>`}
 
       ${nueva ? '' : `
@@ -679,8 +674,7 @@ function modalTrabajadora(t = null, vista = null) {
     // que sea solo lectura ni "Administración" que vea la caja entera.
     const selRol = root.querySelector('#t-rol');
     selRol?.addEventListener('change', () => {
-      root.querySelector('#t-rol-ayuda').textContent =
-        ROLES.find((r) => r.id === selRol.value)?.ayuda || '';
+      root.querySelector('#t-rol-ayuda').textContent = AYUDA_ROL[selRol.value] || '';
     });
 
     root.querySelector('#ok').addEventListener('click', async () => {
