@@ -1,7 +1,48 @@
 # Sistema Operativo — Cocina CIC (Manos Libres)
 
 PWA de gestión para la cocina comunitaria de Manos Libres en el CIC Barrio Movediza, Tandil.
-Proyecto de Mirmidones Asociación Civil. Emplea a mujeres en situación de vulnerabilidad.
+Da trabajo a mujeres cuyas parejas atraviesan el contexto de encierro.
+
+## Titularidad institucional — NO confundir
+
+**Manos Libres NO es un proyecto de Mirmidones.** Es un proyecto **impulsado por la
+Federación de Organizaciones Sociales «Mesa Solidaria Tandil»**, con la participación de:
+
+- **Mirmidones Asociación Civil** — coordinación operativa del proyecto
+- **Ministerio de Justicia** de la Provincia de Buenos Aires — aporta el **presupuesto de parte
+  de las horas de coordinación**, más el marco institucional del programa
+- **Secretaría de Desarrollo y Hábitat** — Municipio de Tandil
+- **Patronato de Liberados** de la Provincia de Buenos Aires
+- **Asociación Civil Bicicletería Comunitaria**
+- **Fundación Pachacamac**
+- **ADOC Vínculos**
+
+Mirmidones coordina y aporta el vínculo con la UP N°37, pero **no es titular del proyecto**.
+
+El **Ministerio de Justicia de la Provincia ya está dentro del proyecto** — no es un invitado.
+La única que se invita a sumarse es la **Secretaría de Protección Ciudadana** (ese es el
+nombre correcto: no "Protección Ciudadana" a secas).
+
+## Estado real de la operación (agosto 2026)
+
+**La cocina NO está produciendo.** Hubo unos meses de actividad con **dos mujeres**, ambas con
+sus parejas privadas de la libertad; hoy no hay ninguna trabajadora ni trabajador en actividad.
+
+El proyecto es joven: no hay años de historia ni volumen acumulado. **No escribas textos que
+sugieran una trayectoria larga, ventas sostenidas o rentabilidad demostrada.** El sistema está
+terminado y esperando la reapertura, no en uso diario.
+
+Para reabrir faltan tres definiciones institucionales, ninguna técnica:
+
+1. **Habilitación del espacio de producción** — bromatológica, depende del Municipio.
+   **El trámite ya está iniciado**: hubo una primera visita, se ejecutaron los trabajos que
+   pidieron y solo falta la inspección final que los verifique. Sin habilitación no se puede
+   dar de alta a una trabajadora en un puesto que no existe formalmente.
+2. **Cuenta bancaria propia y movimientos comerciales formales** — trazabilidad y cobro digital.
+3. **Formalización del vínculo laboral** — monotributo social, cooperativa o esquema mixto
+   por etapas. **La relación de dependencia está descartada, no la propongas.** Como hoy no
+   hay nadie trabajando, no hay que regularizar nada heredado: se arranca bien desde la
+   primera incorporación.
 
 **El documento de referencia es `docs/PDR.md`. Leelo antes de escribir código.**
 Contiene el modelo de datos completo, los flujos de cada módulo, las fórmulas de costeo y el roadmap por fases.
