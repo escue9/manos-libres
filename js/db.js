@@ -539,7 +539,7 @@ export async function seed() {
   if (existentes.length) return;
 
   const un = await db.from('unidad_negocio').insert({
-    nombre: 'Cocina CIC', tipo: 'alimentos', activa: true,
+    nombre: 'Manos Libres', tipo: 'alimentos', activa: true,
   });
 
   await db.from('producto').insert([

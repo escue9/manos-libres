@@ -59,7 +59,7 @@ export function mostrarLogin() {
     })();
 
     function textos() {
-      if (modo === 'ingreso') return { t: 'Ingresá tu PIN', s: 'Cocina CIC · Manos Libres' };
+      if (modo === 'ingreso') return { t: 'Ingresá tu PIN', s: 'Manos Libres' };
       if (!primerPin)          return { t: 'Creá tu PIN', s: 'Cuatro dígitos para entrar a la app' };
       return { t: 'Repetilo', s: 'Para confirmar que no te equivocaste' };
     }

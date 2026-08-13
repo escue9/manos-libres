@@ -13,7 +13,7 @@ const t = (nombre, cond) => { cond ? (ok++, console.log('  ✓', nombre))
 console.log('\n── db.js: seed y consultas');
 await seed();
 const un = await db.from('unidad_negocio').select().single();
-t('crea la unidad de negocio', un?.nombre === 'Cocina CIC');
+t('crea la unidad de negocio', un?.nombre === 'Manos Libres');
 
 const prods = await db.from('producto').select();
 t('siembra 6 productos', prods.length === 6);

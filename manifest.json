@@ -1,6 +1,6 @@
 {
-  "name": "Cocina CIC · Manos Libres",
-  "short_name": "Cocina CIC",
+  "name": "Manos Libres",
+  "short_name": "Manos Libres",
   "description": "Gestión de producción, ventas, jornales y rentabilidad de la cocina comunitaria de Manos Libres.",
   "id": "/index.html",
   "start_url": "./index.html",

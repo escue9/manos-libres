@@ -1,4 +1,4 @@
-# Sistema Operativo — Cocina CIC (Manos Libres)
+# Sistema Operativo — Manos Libres
 
 PWA de gestión para la cocina comunitaria de Manos Libres en el CIC Barrio Movediza, Tandil.
 Da trabajo a mujeres cuyas parejas atraviesan el contexto de encierro.
