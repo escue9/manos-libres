@@ -23,9 +23,12 @@ await state.cargar();
 const ana   = state.trabajadoras.find((x) => x.nombre === 'Ana');
 const maria = state.trabajadoras.find((x) => x.nombre === 'María');
 
-// Semana fija para que el test no dependa del día en que se corre
-const L = '2026-07-20', M = '2026-07-21', X = '2026-07-22', J = '2026-07-23', V = '2026-07-24';
-const DOM = '2026-07-26';
+// Semana relativa a "hoy", no fecha fija de calendario: el autoreporte de
+// más abajo exige que X caiga dentro de los últimos 14 días reales, y una
+// fecha fija terminaba saliéndose de esa ventana con el solo paso del tiempo.
+const diasAtras = (n) => ui.hoyISO(new Date(Date.now() - n * 864e5));
+const L = diasAtras(10), M = diasAtras(9), X = diasAtras(8), J = diasAtras(7), V = diasAtras(6);
+const DOM = diasAtras(4);
 
 /* ================================================================== */
 console.log('\n── marcar y desmarcar jornadas');
