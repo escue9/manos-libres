@@ -444,7 +444,8 @@ function pantallaListo(id, pedido) {
     </section>
 
     <footer class="pie envoltorio">
-      Un proyecto de <strong>Mirmidones Asociación Civil</strong>
+      Un proyecto de la <strong>Federación Mesa Solidaria Tandil</strong>
+      · coordinación de Mirmidones Asociación Civil
     </footer>`;
 }
 
