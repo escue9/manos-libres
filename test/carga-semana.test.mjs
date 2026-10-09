@@ -7,6 +7,8 @@ const { state }    = await import('../js/state.js');
 const { auth }     = await import('../js/auth.js');
 const calc         = await import('../js/calc.js');
 const prod         = await import('../js/modules/produccion.js');
+const equipo       = await import('../js/modules/trabajadoras.js');
+const pedidos      = await import('../js/modules/pedidos.js');
 
 let ok = 0, mal = 0;
 const t = (nombre, cond) => { cond ? (ok++, console.log('  ✓', nombre))
@@ -121,7 +123,9 @@ t('crearOrden devuelve los requeridos vs disponibles', Array.isArray(orden.reque
 const tarta = await porNombre('producto', 'Tarta de carne');               // costo_manual 1500
 const movInsumoAntes = await contar('movimiento_stock_insumo');
 orden = await prod.crearOrden({ fecha: '2026-10-01', items: [{ producto_id: tarta.id, cantidad: 4 }] });
-await prod.cerrarOrden(orden.id, {}, {});
+const ana = state.trabajadoras.find((x) => x.nombre === 'Ana');
+await prod.fijarPagoProduccion(tarta.id, 0);      // cero a propósito: cierra y no paga
+await prod.cerrarOrden(orden.id, {}, { productoras: ana.id });
 const itTarta = (await db.from('produccion_item').select().eq('orden_produccion_id', orden.id))[0];
 t('con costo manual cierra y lo congela', itTarta.costo_unitario_snapshot === 1500);
 t('suma el producto', (await porNombre('producto', tarta.nombre)).stock_actual === 4);
@@ -155,7 +159,8 @@ t('no escribió nada, ni la compra que estaba bien', igual(await foto(), antes))
 const semanaCorta = {
   compras: [{ insumo: 'Carne picada', cantidad: 1, costo_total: 10000 }],
   recetas: [{ producto: 'Empanada de carne', rinde_por_lote: 24, items: [{ insumo: 'Carne picada', cantidad: 1, unidad_medida: 'kg' }] }],
-  producciones: [{ fecha: '2026-10-06', items: [{ producto: 'Empanada de carne', cantidad: 48 }] }],
+  pagos: [{ producto: 'Empanada de carne', pago_produccion: 40 }],
+  producciones: [{ fecha: '2026-10-06', trabajadora: 'Ana', items: [{ producto: 'Empanada de carne', cantidad: 48 }] }],
 };
 err = await tira(() => prod.cargarSemana(semanaCorta));
 t('ve el faltante de la producción antes de escribir la compra', /falta stock de Carne picada \(hacen falta 2 kg, hay 1\)/.test(err?.message));
@@ -169,13 +174,15 @@ t('con motivo_ajuste pasa la validación', conMotivo.plan.producciones.length ==
 t('soloValidar no escribe', igual(await foto(), antes));
 
 err = await tira(() => prod.cargarSemana({
-  producciones: [{ fecha: '2026-10-06', items: [{ producto: 'Combo bondiola 6 porciones', cantidad: 2 }] }],
+  pagos: [{ producto: 'Combo bondiola 6 porciones', pago_produccion: 100 }],
+  producciones: [{ fecha: '2026-10-06', trabajadora: 'Ana', items: [{ producto: 'Combo bondiola 6 porciones', cantidad: 2 }] }],
 }));
 t('valida el costo de los productos sin receta', /no tiene receta ni costo manual/.test(err?.message));
 
 err = await tira(() => prod.cargarSemana({
   recetas: [{ producto: 'Empanada de verdura', rinde_por_lote: 24, items: [{ insumo: 'Tapas de prueba', cantidad: 24 }] }],
-  producciones: [{ fecha: '2026-10-06', items: [{ producto: 'Empanada de verdura', cantidad: 24 }] }],
+  pagos: [{ producto: 'Empanada de verdura', pago_produccion: 40 }],
+  producciones: [{ fecha: '2026-10-06', trabajadora: 'Ana', items: [{ producto: 'Empanada de verdura', cantidad: 24 }] }],
 }));
 t('valida que los insumos de la receta tengan costo', /Sin costo cargado: Tapas de prueba/.test(err?.message));
 
@@ -188,6 +195,8 @@ auth.rol = 'admin';
 console.log('\n── cargarSemana: la semana de vuelta del receso');
 
 const cajaSemana = await contar('movimiento_caja');
+const rocio = await equipo.guardarTrabajadora({ nombre: 'Rocío' });
+await state.cargar();
 
 const res = await prod.cargarSemana({
   reinicio: { motivo: 'Vuelta del receso' },
@@ -206,9 +215,17 @@ const res = await prod.cargarSemana({
       { insumo: 'Tapas de empanada', cantidad: 24,   unidad_medida: 'unidad' },
     ],
   }],
+  pagos: [
+    { producto: 'Empanada de carne', pago_produccion: 40 },
+    { producto: 'Tarta de verdura',  pago_produccion: 300 },
+  ],
   producciones: [
-    { fecha: '2026-10-06', notas: 'Primera jornada de Rocío', items: [{ producto: 'Empanada de carne', cantidad: 48 }] },
-    { fecha: '2026-10-07', items: [{ producto: 'Tarta de verdura', cantidad: 4 }] },
+    { fecha: '2026-10-06', notas: 'Primera jornada de Rocío', trabajadora: 'Rocío',
+      items: [{ producto: 'Empanada de carne', cantidad: 48 }] },
+    { fecha: '2026-10-07', items: [
+      { producto: 'Tarta de verdura', cantidad: 3, trabajadora: 'Rocío' },
+      { producto: 'Tarta de verdura', cantidad: 1, trabajadora: 'Ana' },
+    ] },
   ],
 });
 
@@ -243,8 +260,24 @@ t('el costo de insumos de la orden es el de dos lotes', cerca(oEmp.costo_insumos
 
 const snapEmp = (await db.from('produccion_item').select().eq('orden_produccion_id', oEmp.id))[0];
 const snapTarta = (await db.from('produccion_item').select().eq('orden_produccion_id', oTarta.id))[0];
-t('congela el costo de la receta', cerca(snapEmp.costo_unitario_snapshot, costoEmp));
-t('el producto sin receta congela su costo manual', snapTarta.costo_unitario_snapshot === 1200);
+t('congela el costo de la receta más lo que cobra quien la hace', cerca(snapEmp.costo_unitario_snapshot, costoEmp + 40));
+t('el producto sin receta congela su costo manual más el pago', snapTarta.costo_unitario_snapshot === 1200 + 300);
+
+/* --- lo que cobra cada una --- */
+const pagosSemana = await db.from('pago_produccion').select().gte('fecha', '2026-10-06');
+const deRocio = pagosSemana.filter((p) => p.trabajadora_id === rocio.id);
+const deAna = pagosSemana.filter((p) => p.trabajadora_id === ana.id);
+t('fija el pago por unidad de cada producto', (await pr('Empanada de carne')).pago_produccion === 40);
+t('Rocío cobra sus 48 empanadas y sus 3 tartas',
+  deRocio.length === 2 && deRocio.reduce((a, p) => a + p.total, 0) === 48 * 40 + 3 * 300);
+t('Ana cobra la tarta que hizo ella', deAna.length === 1 && deAna[0].cantidad === 1 && deAna[0].total === 300);
+t('la tarta se cargó en una sola línea con su reparto',
+  (await db.from('produccion_item').select().eq('orden_produccion_id', oTarta.id)).length === 1);
+t('cargado por la administración, entra confirmado', pagosSemana.every((p) => p.confirmada && p.estado_pago === 'pendiente'));
+t('congela el monto por unidad', deRocio.every((p) => p.pago_unitario === (p.producto_id === snapEmp.producto_id ? 40 : 300)));
+t('la mano de obra de la orden es lo que se paga', oEmp.costo_mano_obra === 48 * 40 && oTarta.costo_mano_obra === 4 * 300);
+t('la carga no movió la caja por los pagos: eso pasa al liquidar',
+  (await db.from('movimiento_caja').select()).slice(cajaSemana).every((m) => m.origen === 'compra_insumo'));
 
 const caja = (await db.from('movimiento_caja').select()).slice(cajaSemana);
 t('un egreso automático por compra, y nada más', caja.length === 4
@@ -268,6 +301,15 @@ t('y de cada producto', res.stock.productos.find((p) => p.nombre === 'Empanada d
 const compraCara = await prod.registrarCompra({ insumoId: (await ins('Carne picada')).id, cantidad: 1, costoTotal: 30000 });
 t('la compra que sube el costo lo dice', compraCara.alertas.some((a) =>
   a.texto?.startsWith('Subió el costo de carne picada. Empanada de carne bajó a')));
+
+// La venta congela el costo con la paga adentro: el margen que se ve es el real
+const empHoy = await pr('Empanada de carne');
+const { pedido: venta } = await pedidos.registrarVenta({
+  lineas: [{ producto: empHoy, cantidad: 2 }], medio: 'efectivo',
+});
+const [itemVenta] = await db.from('pedido_item').select().eq('pedido_id', venta.id);
+t('la venta congela materiales más el pago por producción',
+  cerca(itemVenta.costo_unitario, empHoy.costo_calculado + 40));
 
 t('state queda al día para la pantalla', state.insumos.some((i) => i.nombre === 'Tapas de empanada'));
 

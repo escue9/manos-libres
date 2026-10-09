@@ -19,12 +19,19 @@ auth.rol='admin';
 const ana   = state.trabajadoras.find(x=>x.nombre==='Ana');
 const maria = state.trabajadoras.find(x=>x.nombre==='María');
 
-// Ana trabaja 5 días con tarifa distinta; María 2
-for (const f of ['2026-07-20','2026-07-21','2026-07-22','2026-07-23','2026-07-24'])
-  await eq.marcarJornada(ana.id, f);
-for (const f of ['2026-07-20','2026-07-21'])
-  await eq.marcarJornada(maria.id, f);
-await eq.guardarTrabajadora({ id: ana.id, nombre:'Ana', tarifaDia: 12345 });
+// La semana que se muestra es la de hoy
+const { ui } = await import('../js/ui.js');
+const lunes = ui.hoyISO(ui.inicioSemana());
+
+// Ana viene 2 días y produce mucho, con un número que se reconoce; María 1
+await eq.marcarJornada(ana.id, lunes);
+await eq.marcarJornada(maria.id, lunes);
+const fila = (trabajadora_id, cantidad, total, confirmada = true) => ({
+  trabajadora_id, orden_produccion_id: 'o1', produccion_item_id: 'i1',
+  producto_id: state.productos[0].id, fecha: lunes, cantidad, pago_unitario: total / cantidad, total,
+  origen_carga: confirmada ? 'admin' : 'autoreporte', confirmada, estado_pago: 'pendiente', fecha_pago: null,
+});
+await db.from('pago_produccion').insert([fila(ana.id, 777, 12345), fila(maria.id, 3, 900), fila(maria.id, 2, 600, false)]);
 await state.cargar();
 
 const v = document.getElementById('v');
@@ -35,7 +42,8 @@ await eq.render(v);
 const htmlAdmin = v.innerHTML;
 console.log('  ve a Ana:  ', htmlAdmin.includes('Ana'));
 console.log('  ve a María:', htmlAdmin.includes('María'));
-console.log('  ve tarifas:', /12\.345|12345/.test(htmlAdmin));
+console.log('  ve lo de Ana:', /12\.345|12345/.test(htmlAdmin));
+console.log('  ve el botón de confirmar:', htmlAdmin.includes('data-confirmar-pago'));
 console.log('  ve el rol:  ', /Trabajadora/.test(htmlAdmin));
 
 console.log('\n── vista TRABAJADORA (María)');
@@ -46,7 +54,9 @@ const h = v.innerHTML;
 const fugas = [];
 if (h.includes('Ana'))            fugas.push('aparece el nombre de otra trabajadora');
 if (h.includes(ana.id))           fugas.push('aparece el id de otra trabajadora');
-if (/12\.345|12345/.test(h))      fugas.push('aparece la tarifa de otra');
+if (/12\.345|12345/.test(h))      fugas.push('aparece lo que cobra otra');
+if (/777/.test(h))                fugas.push('aparece lo que produjo otra');
+if (h.includes('data-confirmar-pago')) fugas.push('puede confirmar producción');
 if (h.includes('Liquidar'))       fugas.push('ve el botón de liquidar');
 if (h.includes('Total de la semana')) fugas.push('ve el total del equipo');
 if (h.includes('Editar'))         fugas.push('ve el botón de editar');
@@ -58,6 +68,10 @@ const tarjetas = v.querySelectorAll('.card').length;
 console.log('  tarjetas visibles:', tarjetas, '(la suya + su total)');
 console.log('  ve su propio nombre:', h.includes('María'));
 console.log('  ve su total:', h.includes('Tu total de la semana'));
+// Contra el texto y no el HTML: el formato de plata usa un espacio duro, que
+// innerHTML escribe como &nbsp;
+if (!/\$\s?900/.test(v.textContent)) fugas.push('no ve su propio total confirmado');
+if (!/\$\s?600/.test(v.textContent)) fugas.push('no ve lo suyo que espera confirmación');
 console.log('  botones de día:', v.querySelectorAll('[data-dia]').length, '(7 = solo su fila) ' + (v.querySelectorAll('[data-dia]').length===7?'✓':'⚠'));
 
 const ajenos = [...v.querySelectorAll('[data-trab]')].filter(b=>b.dataset.trab!==maria.id);

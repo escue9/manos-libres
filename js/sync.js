@@ -61,6 +61,7 @@ export const ORDEN = [
   'pedido_item',
   'cobro',
   'jornada',
+  'pago_produccion',
   'movimiento_stock_insumo',
   'movimiento_stock_producto',
   'movimiento_caja',

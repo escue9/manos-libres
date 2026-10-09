@@ -151,12 +151,25 @@ export function consumoTotal(planificado, recetasPorProducto, insumosPorId) {
 }
 
 /**
- * Costo efectivo: el de receta si existe, si no el manual.
+ * Costo de los materiales: el de receta si existe, si no el manual.
  * `||` y no `??` a propósito: un costo calculado en 0 es una receta rota, no
  * un producto gratis, y con `??` le ganaba al costo_manual cargado a mano.
  */
-export function costoEfectivo(producto) {
+export function costoBase(producto) {
   return producto.costo_calculado || producto.costo_manual || 0;
+}
+
+/**
+ * Costo efectivo: materiales más lo que se le paga a quien lo produce.
+ *
+ * Desde octubre de 2026 se cobra por producción y no por día, así que la mano
+ * de obra pasó a ser un costo por unidad y entra acá. Es lo que se congela en
+ * cada venta (pedido_item.costo_unitario), y el margen que se ve ya es el real.
+ * Antes la mano de obra iba aparte, en el cierre semanal, porque una tarifa
+ * por día no se puede repartir entre las unidades.
+ */
+export function costoEfectivo(producto) {
+  return costoBase(producto) + (producto.pago_produccion || 0);
 }
 
 /* ------------------------------------------------------------------ */

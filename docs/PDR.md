@@ -142,9 +142,10 @@ Lo que se vende. Puede tener receta (se produce) o no (reventa).
 | `stock_actual` | int | Producto terminado disponible |
 | `stock_minimo` | int | |
 | `rinde_por_lote` | int | Cuántas unidades produce una vuelta de receta |
+| `pago_produccion` | decimal | nullable. Lo que cobra quien produce una unidad. `null` = sin definir: la orden no cierra |
 | `activo` | bool | |
 
-> **Costo efectivo** = `costo_calculado` si hay receta; si no, `costo_manual`.
+> **Costo efectivo** = materiales (`costo_calculado` si hay receta; si no, `costo_manual`) + `pago_produccion`.
 
 ---
 
@@ -282,8 +283,8 @@ Para que una liquidación vieja no cambie si se actualiza la tarifa.
 | `id` | uuid PK | |
 | `trabajadora_id` | uuid FK | |
 | `fecha` | date | |
-| `orden_produccion_id` | uuid FK | nullable. Vincula mano de obra a producción |
-| `tarifa_aplicada` | decimal | Snapshot de `tarifa_historica` vigente a esa fecha |
+| `orden_produccion_id` | uuid FK | nullable. Vincula la asistencia a una orden |
+| `tarifa_aplicada` | decimal | Cero desde octubre de 2026: la jornada es asistencia. Las anteriores conservan su tarifa congelada |
 | `origen_carga` | enum | `admin` \| `autoreporte` — quién la cargó |
 | `confirmada` | bool | Las cargadas por la trabajadora entran en `false` |
 | `estado_pago` | enum | `pendiente` \| `pagada` |
@@ -292,6 +293,27 @@ Para que una liquidación vieja no cambie si se actualiza la tarifa.
 > Solo las jornadas con `confirmada = true` entran en la liquidación y en el costo laboral del cierre semanal.
 
 > **Restricción:** única por (`trabajadora_id`, `fecha`). Una jornada por día por persona.
+
+#### `pago_produccion`
+Lo que cobra cada una por lo que produjo. Desde octubre de 2026 se cobra por producción, no por día.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | uuid PK | |
+| `trabajadora_id` | uuid FK | Quién lo produjo |
+| `orden_produccion_id` | uuid FK | |
+| `produccion_item_id` | uuid FK | La línea de la orden. Una línea puede repartirse entre varias |
+| `producto_id` | uuid FK | |
+| `fecha` | date | La de la orden |
+| `cantidad` | decimal | Unidades que produjo esta persona |
+| `pago_unitario` | decimal | **Snapshot** de `producto.pago_produccion` al cerrar la orden |
+| `total` | decimal | `cantidad × pago_unitario` |
+| `origen_carga` | enum | `admin` \| `autoreporte` |
+| `confirmada` | bool | Lo que carga la trabajadora entra en `false` |
+| `estado_pago` | enum | `pendiente` \| `pagada` |
+| `fecha_pago` | date | nullable |
+
+> Solo lo confirmado entra en la liquidación. Una trabajadora carga solo su propia producción.
 
 ---
 
@@ -391,17 +413,22 @@ Vista de calendario semanal con los pedidos por día de entrega. Es la pantalla 
 
 **Pantallas:** Equipo · Registro semanal · Liquidación
 
+> **Desde octubre de 2026 se cobra por producción.** Cada producto tiene un pago por unidad y quien lo produce lo cobra. Las jornadas quedan como registro de asistencia, sin plata.
+
+#### Flujo: lo producido
+Al cerrar una orden se dice quién produjo cada línea (una línea puede repartirse). Cada parte deja un `pago_produccion` con el monto por unidad congelado. Si cierra la administración entra confirmado; si cierra una trabajadora, queda a confirmar.
+
 #### Flujo: registro semanal
-Grilla de trabajadoras × días de la semana. Tap para marcar jornada trabajada. Cada tap crea o borra una `jornada` con la tarifa vigente congelada.
+Grilla de trabajadoras × días de la semana. Tap para marcar el día que vino. Es asistencia: sirve para los informes sociales, no para pagar.
 
 #### Flujo: liquidación
 1. Admin abre Liquidación de la semana
-2. Ve por trabajadora: días trabajados × tarifa = total a pagar
-3. Confirma el pago → jornadas pasan a `pagada` → se genera egreso en caja
+2. Ve por trabajadora: unidades producidas × pago por unidad = total a pagar
+3. Confirma el pago → lo producido pasa a `pagada` → se genera egreso en caja
 4. Se puede exportar un comprobante simple por trabajadora
 
 #### Vista de la trabajadora
-Solo ve sus propios días marcados y su total pendiente de la semana. Puede marcar su propia jornada (queda pendiente de confirmación del admin). No ve nada del resto del equipo.
+Solo ve lo que produjo ella, su total, lo que espera confirmación y cuánto se paga cada producto. Puede marcar su propio día. No ve nada del resto del equipo.
 
 ---
 
@@ -459,7 +486,13 @@ costo_lote = Σ ( receta_item.cantidad × insumo.costo_unitario × (1 + merma_pc
 costo_unitario = costo_lote ÷ producto.rinde_por_lote
 ```
 
-> **Decisión:** la mano de obra **no** se prorratea dentro del costo unitario del producto. Se imputa como costo laboral en el cierre semanal. Razón: la tarifa es por día trabajado, no por unidad producida — prorratearla daría un costo unitario que varía sin relación con el producto. El margen bruto queda limpio y comparable entre productos.
+```
+costo_efectivo = costo_unitario (o costo_manual) + producto.pago_produccion
+```
+
+> **Decisión (octubre de 2026):** la mano de obra **entra** en el costo unitario, porque ahora se paga por unidad producida. El margen que se ve en Recetas y el que se congela en cada venta ya es el real.
+>
+> Antes no entraba: la tarifa era por día trabajado, y prorratearla daba un costo unitario que variaba sin relación con el producto. Esa razón dejó de existir con el pago por producción.
 
 ### 5.3 Márgenes
 
@@ -473,7 +506,8 @@ margen_bruto_%     = margen_bruto_$ ÷ precio_venta × 100
 ```
 ventas             = Σ pedido_item.cantidad × precio_unitario – descuentos
 costo_mercaderia   = Σ pedido_item.cantidad × costo_unitario   (snapshots)
-costo_laboral      = Σ jornada.tarifa_aplicada  donde confirmada = true
+costo_laboral      = Σ jornada.tarifa_aplicada  donde confirmada = true   (cero desde oct. 2026:
+                     la paga ya está en costo_mercaderia; sumarla acá la contaría dos veces)
 gastos_operativos  = Σ movimiento_caja  donde origen = gasto_operativo
 ganancia_neta      = ventas – costo_mercaderia – costo_laboral – gastos_operativos
 ```

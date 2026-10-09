@@ -150,7 +150,8 @@ export async function recalcularCostos(insumoIds = null) {
 
     await db.from('producto').update({ costo_calculado: costo }).eq('id', p.id);
 
-    const m = calc.margen(p.precio_venta || 0, costo);
+    // El margen se mira con lo que cobra quien lo produce adentro: es costo
+    const m = calc.margen(p.precio_venta || 0, costo + (p.pago_produccion || 0));
     if (p.precio_venta > 0 && m.pct < calc.MARGEN_MINIMO) {
       alertas.push({ producto: p.nombre, margenPct: m.pct, texto: `${p.nombre} bajó a ${m.pct.toFixed(1)}% de margen.` });
     }
@@ -254,11 +255,6 @@ export async function asignarTrabajadoras(ordenId, trabajadoraIds = []) {
     await db.from('jornada').delete().eq('id', j.id);
   }
 
-  const [trabajadoras, tarifas] = await Promise.all([
-    db.from('trabajadora').select(),
-    db.from('tarifa_historica').select(),
-  ]);
-
   for (const id of trabajadoraIds) {
     if (actuales.some((j) => j.trabajadora_id === id)) continue;
 
@@ -270,14 +266,14 @@ export async function asignarTrabajadoras(ordenId, trabajadoraIds = []) {
       continue;
     }
 
-    const t = trabajadoras.find((x) => x.id === id);
+    // Desde octubre de 2026 se cobra por producción: la jornada queda como
+    // registro de asistencia y no lleva plata. Lo que se cobra sale de
+    // pago_produccion al cerrar la orden.
     await db.from('jornada').insert({
       trabajadora_id: id,
       fecha: orden.fecha,
       orden_produccion_id: ordenId,
-      tarifa_aplicada: calc.tarifaVigente(
-        tarifas.filter((x) => x.trabajadora_id === id), orden.fecha, t?.tarifa_dia || 0,
-      ),
+      tarifa_aplicada: 0,
       origen_carga: 'admin',
       confirmada: true,
       estado_pago: 'pendiente',
@@ -292,17 +288,27 @@ export async function asignarTrabajadoras(ordenId, trabajadoraIds = []) {
  *
  *   a) descuenta los insumos según receta, con merma
  *   b) suma el producto terminado
- *   c) congela costo_unitario_snapshot en cada produccion_item
- *   d) imputa el costo de las jornadas vinculadas
+ *   c) congela costo_unitario_snapshot en cada produccion_item — materiales
+ *      más lo que cobra quien lo produce
+ *   d) deja lo que cobra cada productora en pago_produccion, y su suma como
+ *      costo de mano de obra de la orden
  *
  * Si falta insumo no cierra: tira un error con la lista de faltantes. Solo
  * pasa si se le da un motivo de ajuste explícito, y ese ajuste queda
  * registrado con su movimiento de stock (PDR §4.1).
  *
+ * Tampoco cierra si no se sabe quién produjo cada línea, o si un producto no
+ * tiene definido cuánto se paga por unidad: sería producción que alguien hizo
+ * y nadie cobra, y eso no se nota hasta el día de la liquidación.
+ *
  * @param {Object} cantidadesReales  produccion_item_id → cantidad real
  * @param {string} motivoAjuste      obligatorio si hay faltantes
+ * @param {string|Object} productoras  quién produjo. Un id de trabajadora para
+ *        toda la orden, o produccion_item_id → id | [{ trabajadora_id, cantidad }]
+ *        para repartir una línea. Si cierra una trabajadora y no se pasa nada,
+ *        es ella
  */
-export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste = null } = {}) {
+export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste = null, productoras = null } = {}) {
   auth.exigir('cargarProduccion');
   const orden = await db.from('orden_produccion').select().eq('id', ordenId).single();
   if (!orden) throw new Error('Orden inexistente');
@@ -364,18 +370,38 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
   // siempre (regla 4): el mismo criterio que el insumo sin costo en calc.js.
   // Va antes de tocar el stock para que el error no deje la orden por la mitad.
   const sinCosto = [];
+  const sinPago = [];
   for (const l of lineas) {
+    let base;
     try {
-      l.snapshot = calc.costoProducto(
+      base = calc.costoProducto(
         recetasPorProducto.get(l.producto.id) || [], insumosPorId, l.producto.rinde_por_lote,
       );
-    } catch { l.snapshot = null; }
-    if (l.snapshot == null) l.snapshot = calc.costoEfectivo(l.producto);
-    if (!(l.snapshot > 0)) sinCosto.push(l.producto.nombre);
+    } catch { base = null; }
+    if (base == null) base = calc.costoBase(l.producto);
+    if (!(base > 0)) sinCosto.push(l.producto.nombre);
+
+    // null es "nadie lo definió", no "se paga cero": un 0 tiene que ser a propósito
+    l.pagoUnitario = l.producto.pago_produccion;
+    if (l.cantidad > 0 && l.pagoUnitario == null) sinPago.push(l.producto.nombre);
+    l.snapshot = base + (l.pagoUnitario || 0);
   }
   if (sinCosto.length) {
     await soltar();
     throw new Error(`Sin costo para congelar: ${sinCosto.join(', ')}. Cargá la receta o el costo manual`);
+  }
+  if (sinPago.length) {
+    await soltar();
+    throw new Error(`Falta definir cuánto se paga por unidad de: ${sinPago.join(', ')}`);
+  }
+
+  /* --- quién produjo cada línea, antes de escribir nada --- */
+
+  try {
+    await repartir(lineas, productoras);
+  } catch (e) {
+    await soltar();
+    throw e;
   }
 
   /* --- a) insumos: primero verificar, después descontar --- */
@@ -443,12 +469,33 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
     });
   }
 
-  /* --- d) mano de obra: solo las jornadas confirmadas --- */
+  /* --- d) lo que cobra cada productora --- */
 
+  // Si cierra la administración, entra confirmado. Si cierra una trabajadora,
+  // queda a confirmar, igual que el autoreporte de una jornada: es plata que
+  // sale de la caja y la aprueba alguien más que quien la cobra.
+  const confirmada = auth.puede('liquidar');
+  const pagos = lineas.flatMap((l) => (l.reparto || []).map((r) => ({
+    trabajadora_id: r.trabajadora_id,
+    orden_produccion_id: ordenId,
+    produccion_item_id: l.item.id,
+    producto_id: l.producto.id,
+    fecha: orden.fecha,
+    cantidad: r.cantidad,
+    pago_unitario: l.pagoUnitario || 0,     // congelado: si mañana sube, esto no cambia
+    total: r.cantidad * (l.pagoUnitario || 0),
+    origen_carga: confirmada ? 'admin' : 'autoreporte',
+    confirmada,
+    estado_pago: 'pendiente',
+    fecha_pago: null,
+  })));
+  if (pagos.length) await db.from('pago_produccion').insert(pagos);
+
+  // La mano de obra de la orden es lo que se paga por lo producido. Las
+  // jornadas con tarifa son de antes del cambio y se suman por si quedó alguna
   const jornadas = await db.from('jornada').select().eq('orden_produccion_id', ordenId);
-  const costoManoObra = jornadas
-    .filter((j) => j.confirmada)
-    .reduce((a, j) => a + (j.tarifa_aplicada || 0), 0);
+  const costoManoObra = pagos.reduce((a, p) => a + p.total, 0)
+    + jornadas.filter((j) => j.confirmada).reduce((a, j) => a + (j.tarifa_aplicada || 0), 0);
 
   await db.from('orden_produccion').update({
     estado: 'cerrada',
@@ -457,7 +504,83 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
     cerrada_at: ahoraISO(),
   }).eq('id', ordenId);
 
-  return { costoInsumos, costoManoObra, ajustados: faltantes.length };
+  return { costoInsumos, costoManoObra, ajustados: faltantes.length, pagos: pagos.length };
+}
+
+/**
+ * Normaliza `productoras` y lo deja en cada línea como `reparto`:
+ * [{ trabajadora_id, cantidad }] que suma exactamente la cantidad real.
+ *
+ * Una trabajadora solo puede cargarse a sí misma. Repartir una línea con una
+ * compañera sería escribir plata a nombre de otra, y eso lo hace la
+ * administración (el servidor tampoco se lo deja insertar).
+ */
+async function repartir(lineas, productoras) {
+  const admin = auth.puede('liquidar');
+  const propia = !admin ? auth.trabajadoraId : null;
+  if (!admin && !propia) throw new Error('No se sabe quién está cerrando la orden');
+
+  const trabajadoras = new Map((await db.from('trabajadora').select()).map((t) => [t.id, t]));
+
+  for (const l of lineas) {
+    if (!(l.cantidad > 0)) { l.reparto = []; continue; }
+
+    let dato = typeof productoras === 'string' ? productoras : productoras?.[l.item.id];
+    if (dato == null) dato = propia;
+    if (dato == null) throw new Error(`Falta decir quién produjo ${l.producto.nombre}`);
+
+    const reparto = (Array.isArray(dato) ? dato : [{ trabajadora_id: dato, cantidad: l.cantidad }])
+      .map((r) => ({ trabajadora_id: r.trabajadora_id, cantidad: Number(r.cantidad) }))
+      .filter((r) => r.cantidad !== 0);
+
+    for (const r of reparto) {
+      if (!trabajadoras.has(r.trabajadora_id)) throw new Error(`${l.producto.nombre}: esa trabajadora no existe`);
+      if (!(r.cantidad > 0)) throw new Error(`${l.producto.nombre}: las cantidades repartidas tienen que ser mayores a cero`);
+      if (!admin && r.trabajadora_id !== propia) {
+        throw new Error('Solo podés cargar tu propia producción: lo de otra lo carga la administración');
+      }
+    }
+    if (new Set(reparto.map((r) => r.trabajadora_id)).size !== reparto.length) {
+      throw new Error(`${l.producto.nombre}: la misma persona aparece dos veces en el reparto`);
+    }
+    const suma = reparto.reduce((a, r) => a + r.cantidad, 0);
+    if (Math.abs(suma - l.cantidad) > 1e-9) {
+      throw new Error(`${l.producto.nombre}: salieron ${l.cantidad} y el reparto suma ${suma}`);
+    }
+    l.reparto = reparto;
+  }
+}
+
+/**
+ * Cuánto se le paga a quien produce una unidad de este producto.
+ *
+ * Es plata del equipo y también costo: entra en el costo efectivo, así que el
+ * margen cambia en el acto y se avisa si quedó bajo el mínimo. Lo ya producido
+ * no se toca: cada pago_produccion congeló el monto del día en que se cerró.
+ */
+export async function fijarPagoProduccion(productoId, monto) {
+  auth.exigir('liquidar');
+
+  const valor = Number(monto);
+  if (monto === '' || monto == null || !(valor >= 0)) {
+    throw new Error('El pago por unidad tiene que ser un número: cero o más');
+  }
+  const p = await db.from('producto').select().eq('id', productoId).single();
+  if (!p) throw new Error('Producto inexistente');
+
+  await db.from('producto').update({ pago_produccion: valor }).eq('id', productoId);
+
+  const costo = calc.costoEfectivo({ ...p, pago_produccion: valor });
+  const m = calc.margen(p.precio_venta || 0, costo);
+  const flojo = p.precio_venta > 0 && calc.costoBase(p) > 0 && m.pct < calc.MARGEN_MINIMO;
+
+  return {
+    costo,
+    margenPct: m.pct,
+    alerta: flojo
+      ? { producto: p.nombre, margenPct: m.pct, texto: `${p.nombre} bajó a ${m.pct.toFixed(1)}% de margen.` }
+      : null,
+  };
 }
 
 /**
@@ -758,10 +881,11 @@ export async function validarSemana(semana) {
 
   if (!semana || typeof semana !== 'object') throw new Error('La semana tiene que ser un objeto');
 
-  const [insumosDb, productos, recetasDb] = await Promise.all([
+  const [insumosDb, productos, recetasDb, trabajadoras] = await Promise.all([
     db.from('insumo').select(),
     db.from('producto').select(),
     db.from('receta_item').select(),
+    db.from('trabajadora').select(),
   ]);
 
   // Copias: la simulación no puede tocar las filas que devolvió la base.
@@ -776,7 +900,7 @@ export async function validarSemana(semana) {
       .filter((it) => it.insumo_id));
   }
 
-  const plan = { reinicio: null, insumos_nuevos: [], compras: [], recetas: [], producciones: [] };
+  const plan = { reinicio: null, insumos_nuevos: [], compras: [], recetas: [], pagos: [], producciones: [] };
 
   /* --- reinicio --- */
   if (semana.reinicio) {
@@ -848,6 +972,20 @@ export async function validarSemana(semana) {
     } catch (e) { anotar(donde, e); }
   });
 
+  /* --- cuánto se paga por unidad --- */
+  (semana.pagos || []).forEach((g, k) => {
+    const donde = `pagos[${k}]`;
+    try {
+      const producto = resolver(productosSim, g, 'producto');
+      const monto = Number(g.pago_produccion);
+      if (g.pago_produccion === '' || g.pago_produccion == null || !(monto >= 0)) {
+        throw new Error(`${producto.nombre}: pago_produccion tiene que ser cero o más`);
+      }
+      producto.pago_produccion = monto;
+      plan.pagos.push({ producto, monto });
+    } catch (e) { anotar(donde, e); }
+  });
+
   /* --- producciones --- */
   const porObjeto = new Map(insumos.map((i) => [i, i]));
 
@@ -857,12 +995,31 @@ export async function validarSemana(semana) {
       if (p.fecha != null && !FECHA_ISO.test(p.fecha)) throw new Error(`fecha "${p.fecha}" no es AAAA-MM-DD`);
       if (!p.items?.length) throw new Error('la producción no tiene productos');
 
-      const lineas = p.items.map((it, j) => {
+      // Quién produjo: por item, o una para toda la producción
+      const general = (p.trabajadora || p.trabajadora_id) ? resolver(trabajadoras, p, 'trabajadora') : null;
+
+      // Un producto aparece una sola vez por orden: si lo hicieron dos personas
+      // vienen dos items y se juntan en una línea con su reparto
+      const porProducto = new Map();
+      p.items.forEach((it, j) => {
         const producto = resolver(productosSim, it, 'producto');
         const cantidad = Number(it.cantidad);
         if (!(cantidad > 0)) throw new Error(`item ${j}: la cantidad de ${producto.nombre} tiene que ser mayor a cero`);
-        return { producto, cantidad };
+        const quien = (it.trabajadora || it.trabajadora_id) ? resolver(trabajadoras, it, 'trabajadora') : general;
+        if (!quien) throw new Error(`item ${j}: falta quién produjo ${producto.nombre} (trabajadora)`);
+
+        if (!porProducto.has(producto)) porProducto.set(producto, { producto, cantidad: 0, reparto: new Map() });
+        const linea = porProducto.get(producto);
+        linea.cantidad += cantidad;
+        linea.reparto.set(quien, (linea.reparto.get(quien) || 0) + cantidad);
       });
+      const lineas = [...porProducto.values()];
+
+      for (const l of lineas) {
+        if (l.producto.pago_produccion == null) {
+          throw new Error(`${l.producto.nombre}: falta cuánto se paga por unidad (sección pagos)`);
+        }
+      }
 
       const consumo = calc.consumoTotal(lineas, recetas, porObjeto);
 
@@ -917,19 +1074,26 @@ export async function validarSemana(semana) {
  *     insumos_nuevos: [{ nombre, categoria, unidad_medida, stock_minimo }],
  *     compras:        [{ insumo, cantidad, unidad_medida?, costo_total, proveedor, fecha, medio? }],
  *     recetas:        [{ producto, rinde_por_lote, items: [{ insumo, cantidad, unidad_medida, merma_pct }] }],
- *     producciones:   [{ fecha, notas, motivo_ajuste?, items: [{ producto, cantidad }] }]
+ *     pagos:          [{ producto, pago_produccion }],
+ *     producciones:   [{ fecha, notas, trabajadora?, motivo_ajuste?,
+ *                        items: [{ producto, cantidad, trabajadora? }] }]
  *   }
+ *
+ * `trabajadora` (o `trabajadora_id`) dice quién produjo: una para toda la
+ * producción o una por item. Si un producto lo hicieron dos, van dos items.
  *
  * Con `{ soloValidar: true }` devuelve el plan sin escribir.
  */
 export async function cargarSemana(semana, { soloValidar = false } = {}) {
   auth.exigir('gestionarInsumos');
+  // Fijar pagos y cerrar órdenes a nombre de otras es de la administración
+  if (semana?.pagos?.length || semana?.producciones?.length) auth.exigir('liquidar');
   if (!state.unidadNegocio) await state.cargar();
 
   const plan = await validarSemana(semana);
   if (soloValidar) return { plan };
 
-  const resumen = { reinicio: null, insumos: [], compras: [], recetas: [], ordenes: [], alertas: [], egresos: [], stock: null };
+  const resumen = { reinicio: null, insumos: [], compras: [], recetas: [], pagos: [], ordenes: [], alertas: [], egresos: [], stock: null };
 
   if (plan.reinicio) resumen.reinicio = await reiniciarStock(plan.reinicio.motivo);
 
@@ -956,13 +1120,23 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
     resumen.recetas.push(r.producto.nombre);
   }
 
+  for (const g of plan.pagos) {
+    await fijarPagoProduccion(g.producto.id, g.monto);
+    resumen.pagos.push({ producto: g.producto.nombre, pago_produccion: g.monto });
+  }
+
   for (const p of plan.producciones) {
     const orden = await crearOrden({
       ...(p.fecha && { fecha: p.fecha }), notas: p.notas,
       items: p.lineas.map((l) => ({ producto_id: l.producto.id, cantidad: l.cantidad })),
     });
-    const cierre = await cerrarOrden(orden.id, {}, { motivoAjuste: p.motivo_ajuste });
-    resumen.ordenes.push({ id: orden.id, fecha: orden.fecha, costoInsumos: cierre.costoInsumos, ajustados: cierre.ajustados });
+    const items = await db.from('produccion_item').select().eq('orden_produccion_id', orden.id);
+    const productoras = Object.fromEntries(items.map((it) => {
+      const l = p.lineas.find((x) => x.producto.id === it.producto_id);
+      return [it.id, [...l.reparto].map(([t, cantidad]) => ({ trabajadora_id: t.id, cantidad }))];
+    }));
+    const cierre = await cerrarOrden(orden.id, {}, { motivoAjuste: p.motivo_ajuste, productoras });
+    resumen.ordenes.push({ id: orden.id, fecha: orden.fecha, costoInsumos: cierre.costoInsumos, costoManoObra: cierre.costoManoObra, ajustados: cierre.ajustados });
   }
 
   // Las alertas finales, con todas las compras y recetas ya aplicadas
@@ -1637,6 +1811,9 @@ function filaReceta(p, receta) {
             ? `${receta.length} ${receta.length === 1 ? 'insumo' : 'insumos'} · rinde ${p.rinde_por_lote || 1}`
             : '<span class="dim">sin receta</span>'}
           ${verCostos() && costo ? `<span class="dim">·</span><span class="num">${ui.money(costo)} c/u</span>` : ''}
+          ${verCostos() ? (p.pago_produccion == null
+            ? '<span class="dim">·</span><span class="danger">sin paga</span>'
+            : `<span class="dim">·</span>paga <span class="num">${ui.money(p.pago_produccion)}</span>`) : ''}
         </div>
       </div>
       <div class="fila__lado">
@@ -1673,6 +1850,12 @@ function editorReceta(productoId, recetaOriginal) {
     <div class="field" style="margin-bottom:var(--sp-4)">
       <label for="r-rinde">Una vuelta de receta rinde</label>
       <input class="input" id="r-rinde" type="number" inputmode="numeric" min="1" value="${rinde}" ${soloLectura ? 'disabled' : ''}>
+    </div>
+    <div class="field" style="margin-bottom:var(--sp-4)">
+      <label for="r-pago">Se le paga a quien lo produce, por unidad</label>
+      <input class="input" id="r-pago" type="number" inputmode="decimal" step="any" min="0"
+             placeholder="Sin definir" value="${p.pago_produccion ?? ''}" ${soloLectura ? 'disabled' : ''}>
+      <span class="faint">Es costo: entra en el margen. Sin definir, la orden de este producto no cierra.</span>
     </div>
 
     <div id="r-lineas" class="stack"></div>
@@ -1712,24 +1895,39 @@ function editorReceta(productoId, recetaOriginal) {
       pintarCosto();
     }
 
+    const campoPago = root.querySelector('#r-pago');
+    const pagoActual = () => (campoPago.value === '' ? null : Number(campoPago.value));
+
     function pintarCosto() {
       if (!verCostos()) { salida.innerHTML = '<span class="faint">Merma en % · el costo lo ve la administración</span>'; return; }
-      if (!lineas.length) { salida.innerHTML = '<span class="faint">Agregá insumos para ver el costo.</span>'; return; }
 
-      let costo;
-      try {
-        costo = calc.costoProducto(lineas, state.insumosMap, rinde);
-      } catch (e) {
-        salida.innerHTML = `<span class="danger">${ui.esc(e.message)}</span>`;
-        return;
+      // Sin receta, los materiales son el costo manual
+      let materiales;
+      if (lineas.length) {
+        try {
+          materiales = calc.costoProducto(lineas, state.insumosMap, rinde);
+        } catch (e) {
+          salida.innerHTML = `<span class="danger">${ui.esc(e.message)}</span>`;
+          return;
+        }
+      } else {
+        materiales = p.costo_manual || 0;
+        if (!materiales) { salida.innerHTML = '<span class="faint">Agregá insumos para ver el costo.</span>'; return; }
       }
+
+      const paga = pagoActual() || 0;
+      const costo = materiales + paga;
       const m = calc.margen(p.precio_venta || 0, costo);
       const flojo = p.precio_venta > 0 && m.pct < calc.MARGEN_MINIMO;
       salida.innerHTML = `
         <div>Cuesta <b class="num">${ui.money(costo)}</b> por unidad</div>
+        <div class="faint">Materiales <span class="num">${ui.money(materiales)}</span>${lineas.length ? '' : ' (costo manual)'}
+          + paga <span class="num">${ui.money(paga)}</span></div>
         ${p.precio_venta > 0 ? `<div class="faint">Se vende a <span class="num">${ui.money(p.precio_venta)}</span> ·
           margen <b class="num ${flojo ? 'danger' : ''}">${ui.pct(m.pct)}</b></div>` : ''}`;
     }
+
+    campoPago.addEventListener('input', pintarCosto);
 
     cont.addEventListener('input', (e) => {
       const fila = e.target.closest('[data-idx]');
@@ -1767,6 +1965,12 @@ function editorReceta(productoId, recetaOriginal) {
     alGuardar(root.querySelector('#r-guardar'), async () => {
       try {
         const alertas = await guardarReceta(productoId, lineas, rinde);
+        // La paga va aparte: es plata del equipo, con su propio permiso
+        const paga = pagoActual();
+        if (paga != null && paga !== p.pago_produccion) {
+          const { alerta } = await fijarPagoProduccion(productoId, paga);
+          if (alerta && !alertas.some((a) => a.producto === alerta.producto)) alertas.push(alerta);
+        }
         ui.cerrarModal();
         await refrescar();
         if (alertas.length) modalAlertasMargen(alertas, 'Receta guardada');
@@ -1982,7 +2186,7 @@ async function modalOrden(ordenId) {
       }
     });
 
-    root.querySelector('#o-cerrar')?.addEventListener('click', () => modalCerrarOrden(ordenId, items, reqs));
+    root.querySelector('#o-cerrar')?.addEventListener('click', () => modalCerrarOrden(ordenId, items, reqs, { asignadas }));
 
     root.querySelector('#o-cancelar')?.addEventListener('click', async () => {
       ui.cerrarModal();
@@ -1994,25 +2198,82 @@ async function modalOrden(ordenId) {
   });
 }
 
-function modalCerrarOrden(ordenId, items, reqs, valores = null) {
+/**
+ * El cierre: cuánto salió de cada cosa y quién lo hizo, que es lo que cobra.
+ *
+ * La administración elige la productora de cada línea —por defecto la que
+ * está asignada a la orden, si hay una sola— y puede repartir una línea entre
+ * dos. Una trabajadora cierra a su nombre, y su producción queda a confirmar.
+ *
+ * @param {Object} previo  { reales, productoras, asignadas } para volver a
+ *                         abrir sin perder lo cargado
+ */
+function modalCerrarOrden(ordenId, items, reqs, previo = {}) {
+  const { reales: valores = null, productoras: repPrevio = null, asignadas = new Set() } = previo;
   const faltantesPrevios = reqs.filter((r) => r.falta > 0);
   const valorDe = (i) => (valores?.[i.id] != null ? valores[i.id] : i.cantidad_planificada);
+  const admin = auth.puede('liquidar');
+  const equipo = state.trabajadoras;
+  const unica = asignadas.size === 1 ? [...asignadas][0] : '';
+
+  const opciones = (sel) => `
+    <option value="">¿Quién lo hizo?</option>
+    ${equipo.map((t) => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${ui.esc(t.nombre)}</option>`).join('')}`;
+
+  const filaReparto = (sel = '', cant = '', primera = false) => `
+    <div class="row reparto__fila" data-fila>
+      <select class="input grow" data-quien aria-label="Quién lo hizo">${opciones(sel)}</select>
+      ${primera
+        ? '<span class="faint reparto__resto">el resto</span>'
+        : `<input class="input cant-chica" type="number" inputmode="numeric" min="1" value="${cant}" data-cuanto aria-label="Cuántas">
+           <button class="btn btn--ghost" data-sacar aria-label="Sacar">×</button>`}
+    </div>`;
+
+  const repartoInicial = (i) => {
+    const prev = repPrevio?.[i.id];
+    if (Array.isArray(prev) && prev.length) {
+      return prev.map((r, k) => filaReparto(r.trabajadora_id, r.cantidad, k === 0)).join('');
+    }
+    return filaReparto(typeof prev === 'string' ? prev : unica, '', true);
+  };
 
   ui.abrirModal(`
     <h3>¿Cuánto salió?</h3>
     <p class="faint" style="margin-top:calc(var(--sp-2) * -1)">
-      La cantidad real, no la planificada. La diferencia queda registrada.</p>
+      La cantidad real, no la planificada. Se paga lo que salió.</p>
 
     <div class="stack" style="margin-top:var(--sp-4)">
       ${items.map((i) => {
         const p = state.productoPorId(i.producto_id);
+        const sinPaga = p?.pago_produccion == null;
         return `
-          <div class="between" data-item="${i.id}">
-            <span>${ui.esc(p?.nombre || '—')}</span>
-            <input class="input cant-chica" type="number" inputmode="numeric" min="0"
-                   value="${valorDe(i)}" aria-label="Salieron de ${ui.esc(p?.nombre || '')}">
+          <div class="bloque reparto" data-item="${i.id}">
+            <div class="between">
+              <div style="min-width:0">
+                <div>${ui.esc(p?.nombre || '—')}</div>
+                <div class="faint">${sinPaga
+                  ? '<span class="danger">sin paga definida</span>'
+                  : `se paga <span class="num">${ui.money(p.pago_produccion)}</span> c/u`}</div>
+              </div>
+              <input class="input cant-chica" type="number" inputmode="numeric" min="0" data-real
+                     value="${valorDe(i)}" aria-label="Salieron de ${ui.esc(p?.nombre || '')}">
+            </div>
+            ${sinPaga && admin ? `
+              <div class="field" style="margin-top:var(--sp-2)">
+                <label>Paga por unidad</label>
+                <input class="input" type="number" inputmode="decimal" step="any" min="0" data-paga="${p.id}" placeholder="Definila para cerrar">
+              </div>` : ''}
+            ${sinPaga && !admin ? `
+              <div class="alerta alerta--warn" style="margin-top:var(--sp-2)">
+                Falta definir cuánto se paga. Avisale a la administración.</div>` : ''}
+            ${admin ? `
+              <div class="stack reparto__filas" style="margin-top:var(--sp-2)">${repartoInicial(i)}</div>
+              <button class="btn btn--ghost btn--block" data-repartir style="margin-top:var(--sp-2)">+ Repartir con otra</button>
+            ` : ''}
           </div>`;
       }).join('')}
+
+      ${admin ? '' : `<p class="faint" style="margin:0">Se carga a tu nombre y queda a confirmar por la administración.</p>`}
 
       ${faltantesPrevios.length ? `
         <div class="alerta alerta--danger">
@@ -2027,31 +2288,79 @@ function modalCerrarOrden(ordenId, items, reqs, valores = null) {
       <button class="btn btn--primary btn--block" data-accent="produccion" id="cz-guardar">Cerrar orden</button>
     </div>
   `, (root) => {
-    alGuardar(root.querySelector('#cz-guardar'), async () => {
+    root.addEventListener('click', (e) => {
+      const mas = e.target.closest('[data-repartir]');
+      if (mas) {
+        mas.previousElementSibling.insertAdjacentHTML('beforeend', filaReparto());
+        return;
+      }
+      const sacar = e.target.closest('[data-sacar]');
+      if (sacar) sacar.closest('[data-fila]').remove();
+    });
+
+    /** Lo que hay en pantalla, tal cual, para cerrar o para volver a abrir. */
+    function leer() {
       const reales = {};
-      root.querySelectorAll('[data-item]').forEach((el) => {
-        reales[el.dataset.item] = Number(el.querySelector('input').value) || 0;
-      });
+      const productoras = {};
+      for (const el of root.querySelectorAll('[data-item]')) {
+        const real = Number(el.querySelector('[data-real]').value) || 0;
+        reales[el.dataset.item] = real;
+        if (!admin) continue;
+        const filas = [...el.querySelectorAll('[data-fila]')].map((f) => ({
+          trabajadora_id: f.querySelector('[data-quien]').value,
+          cantidad: Number(f.querySelector('[data-cuanto]')?.value) || 0,
+        }));
+        // La primera se lleva lo que no se repartió
+        const otras = filas.slice(1).reduce((a, r) => a + r.cantidad, 0);
+        filas[0].cantidad = real - otras;
+        productoras[el.dataset.item] = filas;
+      }
+      return { reales, productoras };
+    }
+
+    alGuardar(root.querySelector('#cz-guardar'), async () => {
+      const { reales, productoras } = leer();
+
+      if (admin) {
+        for (const el of root.querySelectorAll('[data-item]')) {
+          if (!reales[el.dataset.item]) continue;
+          const nombre = el.querySelector('.between div div').textContent;
+          if (productoras[el.dataset.item].some((r) => !r.trabajadora_id)) {
+            return ui.toast(`Falta quién hizo ${nombre}`, true);
+          }
+          if (productoras[el.dataset.item][0].cantidad <= 0) {
+            return ui.toast(`${nombre}: lo repartido supera lo que salió`, true);
+          }
+        }
+      }
 
       try {
+        for (const campo of root.querySelectorAll('[data-paga]')) {
+          if (campo.value !== '') await fijarPagoProduccion(campo.dataset.paga, campo.value);
+        }
+        if (root.querySelector('[data-paga]')) await state.cargar();
+
         const r = await cerrarOrden(ordenId, reales, {
           motivoAjuste: root.querySelector('#cz-motivo')?.value || null,
+          productoras: admin ? productoras : null,
         });
         ui.cerrarModal();
         await refrescar();
         ui.toast(verCostos()
-          ? `Orden cerrada · insumos ${ui.money(r.costoInsumos)}`
-          : 'Orden cerrada');
+          ? `Orden cerrada · insumos ${ui.money(r.costoInsumos)} · paga ${ui.money(r.costoManoObra)}`
+          : 'Orden cerrada · tu producción queda a confirmar');
       } catch (e) {
         // Si salió MÁS de lo planificado aparecen faltantes que la tabla de
         // arriba no mostraba, y el campo de motivo no se había renderizado:
         // sin esto quedaba un callejón sin salida y había que mentir el número
         if (e.faltantes?.length && !root.querySelector('#cz-motivo')) {
           ui.toast('Salió más de lo planificado: falta insumo', true);
-          return modalCerrarOrden(ordenId, items, e.faltantes.map((f) => ({ ...f, falta: 1 })), reales);
+          return modalCerrarOrden(ordenId, items, e.faltantes.map((f) => ({ ...f, falta: 1 })),
+            { reales, productoras, asignadas });
         }
         ui.toast(e.message || 'No se pudo cerrar', true);
       }
     });
   });
 }
+

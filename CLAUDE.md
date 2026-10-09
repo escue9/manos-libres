@@ -93,7 +93,11 @@ Todo cambio de stock deja un `movimiento_stock_*`. Los ajustes manuales exigen m
 
 ### 8. Privacidad entre trabajadoras
 
-Una trabajadora ve solo sus propias jornadas y su propio total. Nunca la tarifa, los días ni la liquidación de otra. Tampoco ve costos, márgenes ni ganancias.
+Una trabajadora ve solo lo propio: lo que produjo, sus días y su total. Nunca lo que produjo, los días ni la liquidación de otra. Tampoco ve costos, márgenes ni ganancias. Sí ve cuánto se paga por unidad de cada producto: es lo que cobran y es igual para todas.
+
+### 9. Se cobra por producción
+
+Desde octubre de 2026 cada producto tiene `pago_produccion` y quien lo produce lo cobra (`pago_produccion`, la tabla). Las jornadas son asistencia, sin plata. La paga **es costo**: entra en `calc.costoEfectivo`, y por eso el costo laboral del cierre semanal ya no la suma. Ver `docs/FASE-3.md`.
 
 ---
 
@@ -175,6 +179,7 @@ Al portar un mockup:
 - [x] **Fase 0 — Fundación** · estructura PWA, `db.js`, auth por PIN, navegación, identidad visual
 - [x] **Fase 1 — Producción** · insumos, compras, recetas, costeo, órdenes, stock
   - [x] vuelta del receso · reinicio de stock, carga semanal sin pantalla (`cargarSemana`), segmentos Stock · Compras · Recetas · Producción
+- [x] **Pago por producción** (oct. 2026) · reemplaza la tarifa por día — ver addendum de `docs/FASE-3.md`
 - [x] **Fase 2 — Ventas** · clientes, pedidos, agenda de entregas, venta rápida, cobros
 - [x] **Fase 3 — Equipo** · trabajadoras, jornadas, liquidación, vista por rol
 - [x] **Fase 4 — Caja** · movimientos, cierre semanal, rentabilidad, exportables

@@ -699,3 +699,11 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
 /* El botón del aviso va más chico que el resto: comparte una barra angosta con
    el texto y la cruz, y a 360px un .btn de alto completo la parte en dos. */
 .aviso-version .btn { flex: none; padding: var(--sp-2) var(--sp-3); font-size: .85rem; }
+
+/* ---------- Reparto de una línea de producción ---------- */
+
+/* Quién hizo cada cosa al cerrar la orden. La primera fila se lleva "el resto",
+   que ocupa el lugar del número para que las filas queden alineadas. */
+.reparto__fila { gap: var(--sp-2); }
+.reparto__fila .input.grow { flex: 1; min-width: 0; }
+.reparto__resto { width: 86px; flex: none; text-align: right; }
