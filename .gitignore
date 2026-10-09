@@ -23,3 +23,7 @@ backups/
 node_modules/
 
 .vercel
+
+# Las cargas semanales tienen nombres de clientes, CUIT de proveedores y montos,
+# y el repo es público. Quedan en la compu de quien carga.
+cargas/

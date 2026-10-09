@@ -368,3 +368,106 @@ el código.
 verifican que **no** pase nada: una semana con seis errores no escribe ni la
 compra que estaba bien, y un faltante en la producción se detecta antes de
 registrar la compra.
+
+---
+
+## Addendum — la semana completa en una llamada
+
+`cargarSemana` ya cargaba reinicio, insumos, compras, recetas, pagos y
+producciones. Para cargar la semana real del 06/10 al 09/10 le faltaban cuatro
+secciones, y ahora el orden completo es:
+
+reinicio → insumos_nuevos → **productos_nuevos** → **precios** → compras →
+**stock_inicial** → recetas → pagos → producciones → **ventas** → recalcularCostos
+
+| Sección | Función | Qué hace |
+|---|---|---|
+| `productos_nuevos` | `crearProducto()` | Nace con stock 0, sin costo propio (sale de la receta), rinde 1 y sin pago por producción. Nombre único sin importar mayúsculas. Pide `editarPrecios` |
+| `precios` | `guardarPrecio()` | Cambia el precio y devuelve la alerta de margen. No toca ningún snapshot (regla 4). Solo administración |
+| `stock_inicial` | `cargarStockInicial()` | Mercadería que ya estaba: suma stock, pondera el costo y deja un `ajuste` con motivo. **No genera caja**: esa plata no salió esta semana |
+| `ventas` | `guardarCliente`, `crearPedido`, `entregarPedido`, `registrarCobro` | Busca el cliente por nombre o lo crea, carga el pedido con fecha de pedido = fecha de entrega, lo entrega si corresponde y registra cada cobro |
+
+`validarSemana` simula todo junto. Las producciones ven los productos nuevos y
+el stock inicial, y las ventas ven el producto terminado que sumaron las
+producciones. Una venta entregada que deja stock negativo es error. Si algo
+falla no se escribe nada, ni siquiera lo que estaba bien.
+
+El resumen trae `ventas`: los pedidos creados, el total vendido, el total
+cobrado y el saldo a cobrar por cliente.
+
+**Por qué las ventas pasan por las funciones de Pedidos y no escriben directo:**
+así los snapshots, el stock y la caja salen solos, con las mismas reglas que la
+pantalla. Una venta entregada sin cobros queda entregada e impaga: suma a la
+rentabilidad y no a la caja (regla 5).
+
+**Por qué el costo de `stock_inicial` viene en la unidad indicada:** la levadura
+se compra por paquete pero se piensa en gramos. `{ cantidad: 284.375,
+unidad_medida: "g", costo_unitario: 8 }` son $8 por gramo. Si el insumo se
+midiera en kg quedaría a $8.000 por kg: el valor total no cambia.
+
+### En el servidor
+
+`supabase/migrations/20261010_producto_precio.sql` pone en el trigger
+`producto_costo()` lo mismo que `editarPrecios` en el cliente: quien no es
+administración no mueve `precio_venta` ni da de alta productos. Va en el
+trigger y no en una política de INSERT porque el sync empuja con upsert, y una
+política así rompería el stock que sube desde el celular de una trabajadora.
+El alta de cliente ya pasaba por "la cocina opera", igual que `guardarCliente`.
+
+### Pantalla
+
+En **Recetas**, el botón `+` da de alta un producto (nombre, rubro, precio,
+stock mínimo) y abre su receta. El editor de receta tiene el precio de venta, y
+el margen se recalcula mientras se escribe. Las dos cosas son solo para la
+administración.
+
+### Ejemplo
+
+La semana real está en `cargas/2026-10-06_semana.json`, fuera del repo. Recortada y sin
+los datos de terceros que no hacen al formato:
+
+```json
+{
+  "reinicio": { "motivo": "Vuelta del receso: stock en cero, arranca Rocío" },
+  "productos_nuevos": [
+    { "nombre": "Pizzeta", "categoria": "Pizzas", "unidad_venta": "unidad", "precio_venta": 1500, "stock_minimo": 0 }
+  ],
+  "precios": [{ "producto": "Empanada de carne", "precio_venta": 1500 }],
+  "stock_inicial": [
+    { "insumo": "Levadura", "cantidad": 284.375, "unidad_medida": "g", "costo_unitario": 8,
+      "motivo": "Inventario inicial: levadura de antes del receso" }
+  ],
+  "ventas": [
+    { "cliente": { "nombre": "Revendedor", "tipo": "revendedor" }, "canal": "otro",
+      "fecha_entrega": "2026-10-09", "entregado": true,
+      "items": [{ "producto": "Empanada de carne", "cantidad": 144 }],
+      "cobros": [], "notas": "Paga el lunes 12/10" },
+    { "cliente": { "nombre": "Cliente particular", "tipo": "particular" }, "canal": "otro",
+      "fecha_entrega": "2026-10-08", "entregado": true,
+      "items": [{ "producto": "Pizza muzzarella", "cantidad": 4 }],
+      "cobros": [{ "monto": 28000, "medio": "efectivo", "fecha": "2026-10-08" }] }
+  ]
+}
+```
+
+Contra `seed()` más la trabajadora Rocío, la semana completa da (lo prueba
+`test/carga-semana.test.mjs`):
+
+- egresos de compras: $427.886
+- ventas: $619.500 · cobrado: $91.000 · el revendedor que paga el lunes debe $528.500
+- producto terminado de la semana en 0, tapas en 0, carne picada en 0
+- pago por producción de Rocío: $192.620
+- la orden cierra con `motivo_ajuste`: faltan 4 cajas (3,99996 por el
+  redondeo de 8,0833 cajas por lote, que es 97/12 cortado)
+
+`cargas/` está en `.gitignore`: tiene nombres de clientes, CUIT de
+proveedores y montos, y el repo es público. El test de punta a punta la usa si
+está en la compu y la saltea con aviso si no. Para cargarla desde la consola de
+https://manos-libres-app.vercel.app, con sesión de administración, se pega el
+contenido del archivo:
+
+```js
+const semana = /* pegar acá el contenido de cargas/2026-10-06_semana.json */;
+await ml.produccion.cargarSemana(semana, { soloValidar: true });   // primero, sin escribir
+await ml.produccion.cargarSemana(semana);
+```

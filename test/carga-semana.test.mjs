@@ -313,6 +313,199 @@ t('la venta congela materiales más el pago por producción',
 
 t('state queda al día para la pantalla', state.insumos.some((i) => i.nombre === 'Tapas de empanada'));
 
+/** La foto de antes, más las tablas que tocan las secciones nuevas. */
+const fotoTodo = async () => Object.fromEntries(await Promise.all(
+  ['insumo', 'producto', 'compra_insumo', 'movimiento_caja', 'movimiento_stock_insumo',
+    'movimiento_stock_producto', 'receta_item', 'orden_produccion', 'pago_produccion',
+    'cliente', 'pedido', 'pedido_item', 'cobro'].map(async (tb) => [tb, await contar(tb)]),
+));
+
+/* ================================================================== */
+console.log('\n── productos nuevos');
+
+const rProd = await prod.cargarSemana({
+  productos_nuevos: [{ nombre: 'Pizzeta de prueba', categoria: 'Pizzas', unidad_venta: 'unidad', precio_venta: 1500, stock_minimo: 0 }],
+});
+const pizzeta = await pr('Pizzeta de prueba');
+t('crea el producto', rProd.productos[0] === 'Pizzeta de prueba' && pizzeta?.precio_venta === 1500);
+t('nace con stock cero', pizzeta.stock_actual === 0);
+t('sin costo propio: lo pone la receta', pizzeta.costo_manual == null && pizzeta.costo_calculado == null);
+t('rinde 1 y sin pago definido', pizzeta.rinde_por_lote === 1 && pizzeta.pago_produccion == null);
+
+err = await tira(() => prod.crearProducto({ nombre: ' pizzeta DE PRUEBA ', precio_venta: 100 }));
+t('no duplica un nombre aunque cambien mayúsculas', /Ya hay un producto/.test(err?.message));
+err = await tira(() => prod.crearProducto({ nombre: 'Sin precio' }));
+t('sin precio no nace', /precio/.test(err?.message));
+auth.rol = 'trabajadora';
+err = await tira(() => prod.crearProducto({ nombre: 'Otro producto', precio_venta: 100 }));
+t('la trabajadora no da de alta productos', /Sin permiso/.test(err?.message));
+auth.rol = 'admin';
+
+/* ================================================================== */
+console.log('\n── precios');
+
+const itemsAntes = JSON.stringify(await db.from('pedido_item').select());
+const tartaAntes = await pr('Tarta de verdura');
+const rPrecio = await prod.cargarSemana({ precios: [{ producto: 'tarta de verdura', precio_venta: 4000 }] });
+t('cambia el precio', (await pr('Tarta de verdura')).precio_venta === 4000);
+t('el resumen dice de cuánto a cuánto', rPrecio.precios[0].precioPrevio === tartaAntes.precio_venta && rPrecio.precios[0].precio === 4000);
+t('no toca ningún snapshot de lo ya vendido (regla 4)', JSON.stringify(await db.from('pedido_item').select()) === itemsAntes);
+
+const flojo = await prod.guardarPrecio(tartaAntes.id, 1600);
+t('guardarPrecio avisa el margen bajo', flojo.alerta?.producto === 'Tarta de verdura' && flojo.margenPct < calc.MARGEN_MINIMO);
+const sano = await prod.guardarPrecio(tartaAntes.id, 4000);
+t('y no avisa cuando el margen está bien', sano.alerta === null);
+err = await tira(() => prod.guardarPrecio(tartaAntes.id, -5));
+t('un precio negativo no pasa', !!err);
+auth.rol = 'trabajadora';
+err = await tira(() => prod.guardarPrecio(tartaAntes.id, 10));
+t('la trabajadora no cambia precios', /Sin permiso/.test(err?.message));
+auth.rol = 'admin';
+
+/* ================================================================== */
+console.log('\n── stock inicial');
+
+const salAntes = await ins('Sal fina');
+const cajaSI = await contar('movimiento_caja');
+const fotoSI = await fotoTodo();
+err = await tira(() => prod.cargarSemana({ stock_inicial: [{ insumo: 'Sal fina', cantidad: 500, unidad_medida: 'g', costo_unitario: 2 }] }));
+t('sin motivo no carga', /falta el motivo/.test(err?.message));
+t('y no escribió nada', igual(await fotoTodo(), fotoSI));
+
+const rSI = await prod.cargarSemana({
+  stock_inicial: [{ insumo: 'sal fina', cantidad: 500, unidad_medida: 'g', costo_unitario: 2, motivo: 'Quedó del receso' }],
+});
+const sal = await ins('Sal fina');
+t('suma el stock en la unidad del insumo', cerca(sal.stock_actual, (salAntes.stock_actual || 0) + 0.5, 1e-9));
+t('pasa $2 por g a $2.000 por kg y pondera contra lo que había',
+  cerca(sal.costo_unitario, calc.costoPonderado(salAntes.stock_actual || 0, salAntes.costo_unitario || 0, 0.5, 2000)));
+t('NO genera movimiento de caja', await contar('movimiento_caja') === cajaSI);
+const movSal = (await db.from('movimiento_stock_insumo').select().eq('insumo_id', sal.id))
+  .find((m) => m.motivo === 'Quedó del receso');
+t('deja un ajuste con su motivo', movSal?.tipo === 'ajuste' && cerca(movSal.cantidad, 0.5, 1e-9) && movSal.motivo === 'Quedó del receso');
+t('el resumen lo cuenta', rSI.stockInicial[0].insumo === 'Sal fina');
+
+const vacio = await prod.crearInsumo({ nombre: 'Insumo sin stock', unidad_medida: 'kg' });
+await prod.cargarStockInicial({ insumoId: vacio.id, cantidad: 2, costoUnitario: 700, motivo: 'Inventario' });
+t('con stock cero el costo es el dado', (await ins('Insumo sin stock')).costo_unitario === 700);
+
+/* ================================================================== */
+console.log('\n── ventas');
+
+const tartaV2 = await pr('Tarta de verdura');
+const cajaV = await db.from('movimiento_caja').select();
+const fotoV = await fotoTodo();
+
+err = await tira(() => prod.cargarSemana({
+  ventas: [{ cliente: { nombre: 'Cliente goloso', tipo: 'particular' }, canal: 'otro', fecha_entrega: '2026-10-01',
+    entregado: true, items: [{ producto: 'Tarta de verdura', cantidad: tartaV2.stock_actual + 1 }], cobros: [] }],
+}));
+t('una venta que deja stock negativo falla en la validación', /deja stock negativo: Tarta de verdura/.test(err?.message));
+t('y no escribe nada: ni el cliente', igual(await fotoTodo(), fotoV));
+
+const rV = await prod.cargarSemana({
+  ventas: [
+    { cliente: { nombre: 'Club de prueba', tipo: 'club' }, canal: 'otro', fecha_entrega: '2026-10-01',
+      entregado: true, items: [{ producto: 'Tarta de verdura', cantidad: 1 }], cobros: [], notas: 'Paga el lunes' },
+    { cliente: { nombre: 'club DE prueba', tipo: 'club' }, canal: 'whatsapp', fecha_entrega: '2026-10-02',
+      entregado: true, items: [{ producto: 'Tarta de verdura', cantidad: 1 }],
+      cobros: [{ monto: 4000, medio: 'transferencia', fecha: '2026-10-02' }] },
+  ],
+});
+const [pImpago, pPago] = rV.ventas.pedidos;
+const pedImpago = await db.from('pedido').select().eq('id', pImpago.id).single();
+t('una venta con fecha pasada se carga igual', pedImpago.fecha_entrega === '2026-10-01' && pedImpago.fecha_pedido === '2026-10-01');
+t('entregada sin cobro queda entregada e impaga', pedImpago.estado === 'entregado' && pedImpago.estado_pago === 'impago');
+t('con cobro queda pagada', pPago.estadoPago === 'pagado' && pPago.cobrado === 4000);
+const idsCajaV = new Set(cajaV.map((m) => m.id));
+const cajaNueva = (await db.from('movimiento_caja').select()).filter((m) => !idsCajaV.has(m.id));
+t('solo la cobrada genera ingreso en caja, con su fecha y medio', cajaNueva.length === 1
+  && cajaNueva[0].tipo === 'ingreso' && cajaNueva[0].origen === 'cobro' && cajaNueva[0].monto === 4000
+  && cajaNueva[0].fecha === '2026-10-02' && cajaNueva[0].medio === 'transferencia');
+t('el cliente se crea una vez y la segunda lo encuentra por nombre',
+  (await db.from('cliente').select()).filter((c) => c.nombre.toLowerCase() === 'club de prueba').length === 1);
+t('descuenta el stock de las dos', (await pr('Tarta de verdura')).stock_actual === tartaV2.stock_actual - 2);
+const [itVentaTarta] = await db.from('pedido_item').select().eq('pedido_id', pImpago.id);
+t('congela el precio y el costo del momento', itVentaTarta.precio_unitario === 4000
+  && cerca(itVentaTarta.costo_unitario, calc.costoEfectivo(tartaV2)));
+t('el resumen trae vendido, cobrado y saldo por cliente', rV.ventas.totalVendido === 8000
+  && rV.ventas.totalCobrado === 4000 && rV.ventas.saldoPorCliente['Club de prueba'] === 4000);
+
+err = await tira(() => prod.cargarSemana({
+  ventas: [{ cliente: { nombre: 'X', tipo: 'particular' }, canal: 'otro', fecha_entrega: '2026-10-01', entregado: false,
+    items: [{ producto: 'Tarta de verdura', cantidad: 1 }], cobros: [{ monto: 9999999, medio: 'efectivo' }] }],
+}));
+t('no se cobra más que el total', /superan el total/.test(err?.message));
+
+/* ================================================================== */
+console.log('\n── un error en productos_nuevos frena todo');
+
+const fotoE = await fotoTodo();
+err = await tira(() => prod.cargarSemana({
+  productos_nuevos: [{ nombre: 'Tarta de verdura', precio_venta: 100 }],
+  compras: [{ insumo: 'Harina 000', cantidad: 1, costo_total: 1000, fecha: '2026-10-05' }],
+}));
+t('avisa el producto duplicado', /productos_nuevos\[0\]: ya existe un producto "Tarta de verdura"/.test(err?.message));
+t('y no escribe ni la compra que estaba bien', igual(await fotoTodo(), fotoE));
+
+/* ================================================================== */
+console.log('\n── la semana real del 06/10 al 09/10, de punta a punta');
+
+// El JSON no está en el repo (cargas/ va en .gitignore: tiene datos de
+// clientes y el repo es público). Si no está en esta compu, se saltea con aviso
+const { readFile } = await import('node:fs/promises');
+const semanaReal = await readFile(new URL('../cargas/2026-10-06_semana.json', import.meta.url), 'utf8')
+  .then(JSON.parse).catch(() => null);
+if (!semanaReal) console.log('  ⚠ cargas/2026-10-06_semana.json no está en esta compu: se saltea');
+else {
+
+  await db.reset();
+  await seed();
+  await state.cargar();
+  const rocioReal = await equipo.guardarTrabajadora({ nombre: 'Rocío' });
+  await state.cargar();
+
+  const r = await prod.cargarSemana(semanaReal);
+  const caja = await db.from('movimiento_caja').select();
+  const egresosCompra = caja.filter((m) => m.origen === 'compra_insumo').reduce((a, m) => a + m.monto, 0);
+  const ingresos = caja.filter((m) => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
+
+  t('egresos de compras $427.886', egresosCompra === 427886 && r.totalEgresos === 427886);
+  t('ventas $619.500', r.ventas.totalVendido === 619500);
+  t('cobrado $91.000, y es lo único que entró a caja', r.ventas.totalCobrado === 91000 && ingresos === 91000);
+  // Los nombres salen del JSON: el repo es público y no los repite
+  const deudor = semanaReal.ventas.find((v) => !v.cobros.length).cliente.nombre;
+  t('el revendedor que paga el lunes debe $528.500', r.ventas.saldoPorCliente[deudor] === 528500);
+  t('el stock inicial no movió la caja: 16 compras y 3 cobros', caja.length === 19);
+
+  const deLaSemana = ['Empanada de carne', 'Empanada jamón y queso', 'Empanada de roquefort',
+    'Pizza muzzarella', 'Bondiola desmechada (porción)', 'Pizzeta'];
+  const productosFin = await db.from('producto').select();
+  t('producto terminado en 0 para todo lo de la semana', deLaSemana.every((n) =>
+    cerca(productosFin.find((p) => p.nombre === n)?.stock_actual ?? NaN, 0, 1e-9)));
+  t('tapas de empanada en 0', cerca((await ins('Tapas de empanada')).stock_actual, 0, 1e-9));
+  t('carne picada en 0', cerca((await ins('Carne picada')).stock_actual, 0, 1e-9));
+  t('harina y levadura del stock inicial, justas', cerca((await ins('Harina 000')).stock_actual, 0, 1e-9)
+    && cerca((await ins('Levadura')).stock_actual, 0, 1e-9));
+  t('la levadura queda a $8 el g: se mide en g', (await ins('Levadura')).costo_unitario === 8);
+
+  const pagosRocio = (await db.from('pago_produccion').select()).filter((p) => p.trabajadora_id === rocioReal.id);
+  t('pago_produccion de Rocío $192.620', cerca(pagosRocio.reduce((a, p) => a + p.total, 0), 192620));
+
+  const [orden] = await db.from('orden_produccion').select();
+  const ajusteCajas = (await db.from('movimiento_stock_insumo').select())
+    .find((m) => m.tipo === 'ajuste' && m.referencia_id == null && /Cajas: se compraron 20/.test(m.motivo || ''));
+  t('la orden cierra con motivo_ajuste', orden.estado === 'cerrada' && r.ordenes[0].ajustados === 1);
+  // 4 con el redondeo de la receta: 8,0833 cajas por lote es 97/12 cortado
+t('faltan 4 cajas', cerca(ajusteCajas?.cantidad ?? NaN, 4, 0.001));
+
+  const nombres = semanaReal.ventas.map((v) => v.cliente.nombre);
+  t('crea los cuatro productos nuevos y los cuatro clientes', r.productos.length === 4
+    && (await db.from('cliente').select()).filter((c) => nombres.includes(c.nombre)).length === 4);
+  const impago = r.ventas.pedidos.find((p) => p.cliente === deudor);
+  t('y ese pedido queda entregado e impago', impago.estado === 'entregado' && impago.estadoPago === 'impago');
+}
+
 /* ================================================================== */
 console.log(`\n${ok} bien · ${mal} mal\n`);
 process.exit(mal ? 1 : 0);

@@ -359,9 +359,9 @@ async function arrancarSesion() {
   // hacer import() del módulo. Es para no dejar herramientas de admin
   // colgando de window en el celular de una trabajadora
   if (auth.rol === 'admin') {
-    const { crearInsumo, registrarCompra, ajustarStock, reiniciarStock, guardarReceta,
+    const { crearInsumo, crearProducto, guardarPrecio, cargarStockInicial, registrarCompra, ajustarStock, reiniciarStock, guardarReceta,
       requerimientos, crearOrden, cerrarOrden, validarSemana, cargarSemana, recalcularCostos } = produccion;
-    window.ml = { produccion: { crearInsumo, registrarCompra, ajustarStock, reiniciarStock, guardarReceta,
+    window.ml = { produccion: { crearInsumo, crearProducto, guardarPrecio, cargarStockInicial, registrarCompra, ajustarStock, reiniciarStock, guardarReceta,
       requerimientos, crearOrden, cerrarOrden, validarSemana, cargarSemana, recalcularCostos } };
   }
 

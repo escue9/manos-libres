@@ -21,7 +21,10 @@ import { state } from '../state.js';
 import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
-import { demandaPendiente, MEDIOS } from './pedidos.js';
+import {
+  demandaPendiente, MEDIOS, CANALES, TIPOS_CLIENTE,
+  guardarCliente, crearPedido, entregarPedido, registrarCobro,
+} from './pedidos.js';
 
 const CATEGORIAS_INSUMO = ['Almacén', 'Carnicería', 'Verdulería', 'Lácteos', 'Packaging', 'Otros'];
 
@@ -789,6 +792,126 @@ export async function crearInsumo({ nombre, categoria = 'Otros', unidad_medida, 
   });
 }
 
+/**
+ * Alta de producto. Nace con stock cero y sin costo propio: el costo sale de
+ * la receta (costo_calculado), no de un número estimado. Tampoco nace con pago
+ * por producción: null es "nadie lo definió", y cerrarOrden no deja producirlo
+ * hasta que alguien lo fije. Un 0 tiene que ser a propósito.
+ *
+ * El precio es lo que se le cobra al público: por eso pide editarPrecios y no
+ * gestionarInsumos.
+ */
+export async function crearProducto({ nombre, categoria = 'Otros', unidad_venta = 'unidad', precio_venta, stock_minimo = 0 }) {
+  auth.exigir('editarPrecios');
+
+  nombre = nombre?.trim();
+  if (!nombre) throw new Error('Falta el nombre del producto');
+  const precio = Number(precio_venta);
+  if (precio_venta === '' || precio_venta == null || !(precio >= 0)) {
+    throw new Error(`${nombre}: el precio tiene que ser un número, cero o más`);
+  }
+
+  const existentes = await db.from('producto').select();
+  if (existentes.some((p) => clave(p.nombre) === clave(nombre))) {
+    throw new Error(`Ya hay un producto que se llama ${nombre}`);
+  }
+
+  const un = state.unidadNegocio?.id ?? (await db.from('unidad_negocio').select().single())?.id;
+  return db.from('producto').insert({
+    unidad_negocio_id: un,
+    nombre,
+    categoria: String(categoria || 'Otros').trim() || 'Otros',
+    unidad_venta: String(unidad_venta || 'unidad').trim() || 'unidad',
+    precio_venta: precio,
+    costo_manual: null, costo_calculado: null, pago_produccion: null,
+    stock_actual: 0,
+    stock_minimo: Number(stock_minimo) || 0,
+    rinde_por_lote: 1,
+    activo: true,
+  });
+}
+
+/**
+ * Cambia el precio de venta y devuelve cómo quedó el margen.
+ *
+ * No toca ningún snapshot (regla 4): lo ya vendido conserva el precio con el
+ * que se vendió en su pedido_item. El precio nuevo rige desde el próximo pedido.
+ */
+export async function guardarPrecio(productoId, precio) {
+  auth.exigir('editarPrecios');
+
+  const valor = Number(precio);
+  if (precio === '' || precio == null || !(valor >= 0)) {
+    throw new Error('El precio tiene que ser un número: cero o más');
+  }
+  const p = await db.from('producto').select().eq('id', productoId).single();
+  if (!p) throw new Error('Producto inexistente');
+
+  await db.from('producto').update({ precio_venta: valor }).eq('id', productoId);
+
+  // El mismo criterio que fijarPagoProduccion: sin costo cargado no hay margen
+  // que avisar, y un 100% inventado no es una buena noticia
+  const costo = calc.costoEfectivo(p);
+  const m = calc.margen(valor, costo);
+  const flojo = valor > 0 && calc.costoBase(p) > 0 && m.pct < calc.MARGEN_MINIMO;
+
+  return {
+    precioPrevio: p.precio_venta,
+    precio: valor,
+    margenPct: calc.costoBase(p) > 0 ? m.pct : null,
+    alerta: flojo
+      ? { producto: p.nombre, margenPct: m.pct, texto: `${p.nombre} bajó a ${m.pct.toFixed(1)}% de margen.` }
+      : null,
+  };
+}
+
+/**
+ * Mercadería que ya estaba en la cocina y no se compró esta semana: la harina
+ * que quedó del receso, un maple de huevos que trajo alguien.
+ *
+ * Es un ajuste con costo, no una compra. Suma stock con su movimiento 'ajuste'
+ * y motivo (regla 7) y mueve el costo por promedio ponderado igual que una
+ * compra, pero NO genera egreso en caja: esa plata no salió esta semana, y
+ * cargarla como compra la contaría en un cierre que no la gastó.
+ *
+ * `costoUnitario` viene en `unidadMedida` ($8 por g) y se pasa a la unidad del
+ * insumo ($8.000 por kg): el valor total de lo cargado no cambia.
+ */
+export async function cargarStockInicial({ insumoId, cantidad, unidadMedida = null, costoUnitario, motivo }) {
+  auth.exigir('gestionarInsumos');
+
+  motivo = String(motivo || '').trim();
+  if (!motivo) throw new Error('El stock inicial necesita un motivo');
+  cantidad = Number(cantidad);
+  const costo = Number(costoUnitario);
+  if (!(cantidad > 0)) throw new Error('La cantidad tiene que ser mayor a cero');
+  if (costoUnitario === '' || costoUnitario == null || !(costo >= 0)) {
+    throw new Error('Falta el costo unitario o es negativo');
+  }
+
+  const insumo = await db.from('insumo').select().eq('id', insumoId).single();
+  if (!insumo) throw new Error('Insumo inexistente');
+
+  const cant = unidadMedida ? calc.convertir(cantidad, unidadMedida, insumo.unidad_medida) : cantidad;
+  const costoUnit = (cantidad * costo) / cant;
+
+  const stockPrevio = insumo.stock_actual || 0;
+  const costoNuevo = calc.costoPonderado(stockPrevio, insumo.costo_unitario || 0, cant, costoUnit);
+
+  await db.from('insumo').update({
+    stock_actual: stockPrevio + cant,
+    costo_unitario: costoNuevo,
+  }).eq('id', insumoId);
+
+  await db.from('movimiento_stock_insumo').insert({
+    insumo_id: insumoId, fecha: ahoraISO(), tipo: 'ajuste', cantidad: cant, motivo,
+    referencia_id: null,
+  });
+
+  const alertas = await recalcularCostos([insumoId]);
+  return { cantidad: cant, costoPrevio: insumo.costo_unitario || 0, costoNuevo, alertas };
+}
+
 /** Un ajuste con la forma del importador. Las dos funciones de abajo hacen el trabajo. */
 export async function ajustarStock({ tabla, id, cantidad_nueva, motivo }) {
   if (tabla === 'insumo') return ajustarStockInsumo(id, cantidad_nueva, motivo);
@@ -881,11 +1004,12 @@ export async function validarSemana(semana) {
 
   if (!semana || typeof semana !== 'object') throw new Error('La semana tiene que ser un objeto');
 
-  const [insumosDb, productos, recetasDb, trabajadoras] = await Promise.all([
+  const [insumosDb, productos, recetasDb, trabajadoras, clientes] = await Promise.all([
     db.from('insumo').select(),
     db.from('producto').select(),
     db.from('receta_item').select(),
     db.from('trabajadora').select(),
+    db.from('cliente').select(),
   ]);
 
   // Copias: la simulación no puede tocar las filas que devolvió la base.
@@ -900,7 +1024,10 @@ export async function validarSemana(semana) {
       .filter((it) => it.insumo_id));
   }
 
-  const plan = { reinicio: null, insumos_nuevos: [], compras: [], recetas: [], pagos: [], producciones: [] };
+  const plan = {
+    reinicio: null, insumos_nuevos: [], productos_nuevos: [], precios: [], compras: [],
+    stock_inicial: [], recetas: [], pagos: [], producciones: [], ventas: [],
+  };
 
   /* --- reinicio --- */
   if (semana.reinicio) {
@@ -926,6 +1053,42 @@ export async function validarSemana(semana) {
     plan.insumos_nuevos.push({ datos: { ...n, nombre }, sim });
   });
 
+  /* --- productos nuevos --- */
+  // Nacen sin id. Las recetas simuladas se guardan por id de producto, así que
+  // cada uno lleva uno provisorio hasta que el alta le ponga el de verdad
+  (semana.productos_nuevos || []).forEach((n, k) => {
+    const donde = `productos_nuevos[${k}]`;
+    const nombre = n?.nombre?.trim();
+    if (!nombre) return errores.push(`${donde}: falta el nombre`);
+    const precio = Number(n.precio_venta);
+    if (n.precio_venta === '' || n.precio_venta == null || !(precio >= 0)) {
+      return errores.push(`${donde} (${nombre}): falta el precio de venta o es negativo`);
+    }
+    if (productosSim.some((p) => clave(p.nombre) === clave(nombre))) {
+      return errores.push(`${donde}: ya existe un producto "${nombre}"`);
+    }
+    const sim = {
+      id: `nuevo:${k}`, nombre, precio_venta: precio, stock_actual: 0, rinde_por_lote: 1,
+      costo_manual: null, costo_calculado: null, pago_produccion: null,
+    };
+    productosSim.push(sim);
+    plan.productos_nuevos.push({ datos: { ...n, nombre, precio_venta: precio }, sim });
+  });
+
+  /* --- precios --- */
+  (semana.precios || []).forEach((g, k) => {
+    const donde = `precios[${k}]`;
+    try {
+      const producto = resolver(productosSim, g, 'producto');
+      const precio = Number(g.precio_venta);
+      if (g.precio_venta === '' || g.precio_venta == null || !(precio >= 0)) {
+        throw new Error(`${producto.nombre}: precio_venta tiene que ser cero o más`);
+      }
+      producto.precio_venta = precio;
+      plan.precios.push({ producto, precio });
+    } catch (e) { anotar(donde, e); }
+  });
+
   /* --- compras --- */
   (semana.compras || []).forEach((c, k) => {
     const donde = `compras[${k}]`;
@@ -942,6 +1105,28 @@ export async function validarSemana(semana) {
       insumo.costo_unitario = calc.costoPonderado(insumo.stock_actual || 0, insumo.costo_unitario || 0, cantidad, costoTotal / cantidad);
       insumo.stock_actual = (insumo.stock_actual || 0) + cantidad;
       plan.compras.push({ insumo, cantidad, costo_total: costoTotal, proveedor: c.proveedor || '', fecha: c.fecha, medio: c.medio });
+    } catch (e) { anotar(donde, e); }
+  });
+
+  /* --- stock inicial: lo que ya estaba en la cocina --- */
+  (semana.stock_inicial || []).forEach((s0, k) => {
+    const donde = `stock_inicial[${k}]`;
+    try {
+      const insumo = resolver(insumos, s0, 'insumo');
+      const cantidad = Number(s0.cantidad);
+      const costo = Number(s0.costo_unitario);
+      if (!(cantidad > 0)) throw new Error('la cantidad tiene que ser mayor a cero');
+      if (s0.costo_unitario === '' || s0.costo_unitario == null || !(costo >= 0)) {
+        throw new Error('falta el costo unitario o es negativo');
+      }
+      if (!s0.motivo?.trim()) throw new Error(`${insumo.nombre}: falta el motivo`);
+      // Igual que cargarStockInicial: el costo viene en la unidad que se indicó
+      const cant = s0.unidad_medida ? calc.convertir(cantidad, s0.unidad_medida, insumo.unidad_medida) : cantidad;
+      insumo.costo_unitario = calc.costoPonderado(insumo.stock_actual || 0, insumo.costo_unitario || 0, cant, (cantidad * costo) / cant);
+      insumo.stock_actual = (insumo.stock_actual || 0) + cant;
+      plan.stock_inicial.push({
+        insumo, cantidad, unidad_medida: s0.unidad_medida || null, costo_unitario: costo, motivo: s0.motivo.trim(),
+      });
     } catch (e) { anotar(donde, e); }
   });
 
@@ -1047,6 +1232,81 @@ export async function validarSemana(semana) {
     } catch (e) { anotar(donde, e); }
   });
 
+  /* --- ventas --- */
+  // Ven el producto terminado que sumaron las producciones. Una venta entregada
+  // descuenta stock; si lo deja negativo es que falta cargar producción, y en
+  // una carga semanal eso es un error de la planilla, no una venta de mostrador
+  const clientesSim = clientes.map((c) => ({ ...c }));
+  const tiposCliente = TIPOS_CLIENTE.map((x) => x.id);
+  const canales = CANALES.map((x) => x.id);
+  const medios = MEDIOS.map((x) => x.id);
+
+  (semana.ventas || []).forEach((v, k) => {
+    const donde = `ventas[${k}]`;
+    try {
+      const nombre = v?.cliente?.nombre?.trim();
+      if (!nombre) throw new Error('falta el nombre del cliente');
+      const tipo = v.cliente.tipo || 'particular';
+      if (!tiposCliente.includes(tipo)) throw new Error(`${nombre}: tipo de cliente "${tipo}" no existe (${tiposCliente.join(', ')})`);
+      const canal = v.canal || 'otro';
+      if (!canales.includes(canal)) throw new Error(`canal "${canal}" no existe (${canales.join(', ')})`);
+      if (!FECHA_ISO.test(v.fecha_entrega || '')) throw new Error(`fecha_entrega "${v.fecha_entrega}" no es AAAA-MM-DD`);
+      if (!v.items?.length) throw new Error(`${nombre}: la venta no tiene productos`);
+
+      let cliente = clientesSim.find((c) => clave(c.nombre) === clave(nombre));
+      if (!cliente) {
+        cliente = { id: null, nombre, telefono: v.cliente.telefono || '', tipo, nuevo: true };
+        clientesSim.push(cliente);
+      }
+
+      const items = v.items.map((it, j) => {
+        const producto = resolver(productosSim, it, 'producto');
+        const cantidad = Number(it.cantidad);
+        if (!(cantidad > 0)) throw new Error(`item ${j}: la cantidad de ${producto.nombre} tiene que ser mayor a cero`);
+        const precio = it.precio != null ? Number(it.precio) : producto.precio_venta;
+        if (!(precio > 0)) throw new Error(`item ${j}: ${producto.nombre} no tiene precio de venta`);
+        // El pedido congela costo (regla 4): sin receta ni costo manual quedaría
+        // un margen del 100% grabado para siempre
+        if (!recetas.get(producto.id)?.length && !(producto.costo_manual > 0) && !(producto.costo_calculado > 0)) {
+          throw new Error(`item ${j}: ${producto.nombre} no tiene receta ni costo: no hay costo para congelar`);
+        }
+        return { producto, cantidad, precio, precioExplicito: it.precio != null };
+      });
+      const total = items.reduce((a, it) => a + it.cantidad * it.precio, 0);
+
+      const cobros = (v.cobros || []).map((c, j) => {
+        const monto = Number(c.monto);
+        if (!(monto > 0)) throw new Error(`cobro ${j}: el monto tiene que ser mayor a cero`);
+        const medio = c.medio || 'efectivo';
+        if (!medios.includes(medio)) throw new Error(`cobro ${j}: medio "${medio}" no existe (${medios.join(', ')})`);
+        const fecha = c.fecha || v.fecha_entrega;
+        if (!FECHA_ISO.test(fecha)) throw new Error(`cobro ${j}: fecha "${fecha}" no es AAAA-MM-DD`);
+        return { monto, medio, fecha };
+      });
+      const cobrado = cobros.reduce((a, c) => a + c.monto, 0);
+      if (cobrado > total + 1e-6) throw new Error(`${nombre}: los cobros (${cobrado}) superan el total (${total})`);
+
+      const entregado = !!v.entregado;
+      if (entregado) {
+        // Se mira por producto y no por línea: dos líneas del mismo suman
+        const pide = new Map();
+        items.forEach((it) => pide.set(it.producto, (pide.get(it.producto) || 0) + it.cantidad));
+        const cortos = [...pide].filter(([p, q]) => q > (p.stock_actual || 0) + 1e-9);
+        if (cortos.length) {
+          throw new Error('deja stock negativo: ' + cortos
+            .map(([p, q]) => `${p.nombre} (se venden ${q}, hay ${+(p.stock_actual || 0).toFixed(3)})`)
+            .join(', ') + '. Falta cargar producción');
+        }
+        pide.forEach((q, p) => { p.stock_actual = (p.stock_actual || 0) - q; });
+      }
+
+      plan.ventas.push({
+        cliente, canal, fecha_entrega: v.fecha_entrega, entregado, items, cobros, total,
+        notas: String(v.notas || '').trim(),
+      });
+    } catch (e) { anotar(donde, e); }
+  });
+
   if (errores.length) {
     const err = new Error(`La semana no se cargó. ${errores.length} problema${errores.length > 1 ? 's' : ''}:\n- ${errores.join('\n- ')}`);
     err.errores = errores;
@@ -1056,9 +1316,10 @@ export async function validarSemana(semana) {
 }
 
 /**
- * Carga una semana de cocina de una sola vez: reinicio de stock, insumos
- * nuevos, compras, recetas y producciones, en ese orden. Es la puerta para
- * cargar desde la consola o desde otra sesión, sin pasar por las pantallas.
+ * Carga una semana de cocina de una sola vez, en este orden: reinicio de
+ * stock, insumos nuevos, productos nuevos, precios, compras, stock inicial,
+ * recetas, pagos, producciones y ventas. Es la puerta para cargar desde la
+ * consola o desde otra sesión, sin pasar por las pantallas.
  *
  * Valida todo antes de escribir (validarSemana): si algo está mal no se
  * escribe nada y el error trae la lista completa.
@@ -1071,13 +1332,23 @@ export async function validarSemana(semana) {
  *
  *   {
  *     reinicio:       { motivo },
- *     insumos_nuevos: [{ nombre, categoria, unidad_medida, stock_minimo }],
- *     compras:        [{ insumo, cantidad, unidad_medida?, costo_total, proveedor, fecha, medio? }],
- *     recetas:        [{ producto, rinde_por_lote, items: [{ insumo, cantidad, unidad_medida, merma_pct }] }],
- *     pagos:          [{ producto, pago_produccion }],
- *     producciones:   [{ fecha, notas, trabajadora?, motivo_ajuste?,
- *                        items: [{ producto, cantidad, trabajadora? }] }]
+ *     insumos_nuevos:   [{ nombre, categoria, unidad_medida, stock_minimo }],
+ *     productos_nuevos: [{ nombre, categoria, unidad_venta, precio_venta, stock_minimo }],
+ *     precios:          [{ producto, precio_venta }],
+ *     compras:          [{ insumo, cantidad, unidad_medida?, costo_total, proveedor, fecha, medio? }],
+ *     stock_inicial:    [{ insumo, cantidad, unidad_medida?, costo_unitario, motivo }],
+ *     recetas:          [{ producto, rinde_por_lote, items: [{ insumo, cantidad, unidad_medida, merma_pct }] }],
+ *     pagos:            [{ producto, pago_produccion }],
+ *     producciones:     [{ fecha, notas, trabajadora?, motivo_ajuste?,
+ *                          items: [{ producto, cantidad, trabajadora? }] }],
+ *     ventas:           [{ cliente: { nombre, telefono?, tipo }, canal, fecha_entrega, entregado,
+ *                          items: [{ producto, cantidad, precio? }],
+ *                          cobros: [{ monto, medio, fecha }], notas? }]
  *   }
+ *
+ * `stock_inicial` es mercadería que ya estaba: suma stock y costo, sin caja.
+ * En `ventas` el cliente se busca por nombre y se crea si no existe; una venta
+ * entregada sin cobros queda impaga. Puede tener fecha pasada.
  *
  * `trabajadora` (o `trabajadora_id`) dice quién produjo: una para toda la
  * producción o una por item. Si un producto lo hicieron dos, van dos items.
@@ -1088,12 +1359,18 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
   auth.exigir('gestionarInsumos');
   // Fijar pagos y cerrar órdenes a nombre de otras es de la administración
   if (semana?.pagos?.length || semana?.producciones?.length) auth.exigir('liquidar');
+  // El precio es lo que paga el público: lo cambia quien puede cambiar precios
+  if (semana?.productos_nuevos?.length || semana?.precios?.length) auth.exigir('editarPrecios');
+  if (semana?.ventas?.length) { auth.exigir('cargarPedidos'); auth.exigir('gestionarClientes'); }
   if (!state.unidadNegocio) await state.cargar();
 
   const plan = await validarSemana(semana);
   if (soloValidar) return { plan };
 
-  const resumen = { reinicio: null, insumos: [], compras: [], recetas: [], pagos: [], ordenes: [], alertas: [], egresos: [], stock: null };
+  const resumen = {
+    reinicio: null, insumos: [], productos: [], precios: [], compras: [], stockInicial: [], recetas: [],
+    pagos: [], ordenes: [], ventas: null, alertas: [], egresos: [], stock: null,
+  };
 
   if (plan.reinicio) resumen.reinicio = await reiniciarStock(plan.reinicio.motivo);
 
@@ -1104,6 +1381,18 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
     resumen.insumos.push(creado.nombre);
   }
 
+  // Lo mismo con los productos: el id provisorio de la simulación se reemplaza
+  for (const n of plan.productos_nuevos) {
+    const creado = await crearProducto(n.datos);
+    n.sim.id = creado.id;
+    resumen.productos.push(creado.nombre);
+  }
+
+  for (const g of plan.precios) {
+    const r = await guardarPrecio(g.producto.id, g.precio);
+    resumen.precios.push({ producto: g.producto.nombre, precioPrevio: r.precioPrevio, precio: r.precio });
+  }
+
   for (const c of plan.compras) {
     const r = await registrarCompra({
       insumoId: c.insumo.id, cantidad: c.cantidad, costoTotal: c.costo_total,
@@ -1111,6 +1400,14 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
     });
     resumen.compras.push({ insumo: c.insumo.nombre, cantidad: c.cantidad, costoPrevio: r.costoPrevio, costoNuevo: r.costoNuevo });
     resumen.egresos.push({ insumo: c.insumo.nombre, fecha: r.compra.fecha, monto: c.costo_total, referencia_id: r.compra.id });
+  }
+
+  for (const s0 of plan.stock_inicial) {
+    const r = await cargarStockInicial({
+      insumoId: s0.insumo.id, cantidad: s0.cantidad, unidadMedida: s0.unidad_medida,
+      costoUnitario: s0.costo_unitario, motivo: s0.motivo,
+    });
+    resumen.stockInicial.push({ insumo: s0.insumo.nombre, cantidad: r.cantidad, costoNuevo: r.costoNuevo });
   }
 
   for (const r of plan.recetas) {
@@ -1138,6 +1435,42 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
     const cierre = await cerrarOrden(orden.id, {}, { motivoAjuste: p.motivo_ajuste, productoras });
     resumen.ordenes.push({ id: orden.id, fecha: orden.fecha, costoInsumos: cierre.costoInsumos, costoManoObra: cierre.costoManoObra, ajustados: cierre.ajustados });
   }
+
+  // Cada venta pasa por las mismas funciones que la pantalla de Pedidos: el
+  // pedido congela precio y costo, entregar descuenta stock y cobrar genera el
+  // ingreso en caja. Entregada sin cobros queda impaga: suma a la rentabilidad
+  // y no a la caja (regla 5)
+  const ventas = { pedidos: [], totalVendido: 0, totalCobrado: 0, saldoPorCliente: {} };
+  for (const v of plan.ventas) {
+    if (!v.cliente.id) {
+      // Puede haberlo creado una venta anterior de esta misma carga
+      const ya = (await db.from('cliente').select()).find((c) => clave(c.nombre) === clave(v.cliente.nombre));
+      v.cliente.id = ya?.id ?? (await guardarCliente({
+        nombre: v.cliente.nombre, telefono: v.cliente.telefono, tipo: v.cliente.tipo,
+      })).id;
+    }
+    const { pedido } = await crearPedido({
+      clienteId: v.cliente.id, canal: v.canal,
+      fechaPedido: v.fecha_entrega, fechaEntrega: v.fecha_entrega,
+      items: v.items.map((it) => ({
+        producto_id: it.producto.id, cantidad: it.cantidad, ...(it.precioExplicito && { precio: it.precio }),
+      })),
+      notas: v.notas,
+    });
+    if (v.entregado) await entregarPedido(pedido.id, { fecha: v.fecha_entrega });
+    for (const c of v.cobros) await registrarCobro(pedido.id, c);
+
+    const fin = await db.from('pedido').select().eq('id', pedido.id).single();
+    const saldo = Math.max(0, (fin.total || 0) - (fin.monto_cobrado || 0));
+    ventas.pedidos.push({
+      id: fin.id, cliente: v.cliente.nombre, fecha: v.fecha_entrega, estado: fin.estado,
+      total: fin.total, cobrado: fin.monto_cobrado || 0, saldo, estadoPago: fin.estado_pago,
+    });
+    ventas.totalVendido += fin.total || 0;
+    ventas.totalCobrado += fin.monto_cobrado || 0;
+    ventas.saldoPorCliente[v.cliente.nombre] = (ventas.saldoPorCliente[v.cliente.nombre] || 0) + saldo;
+  }
+  if (plan.ventas.length) resumen.ventas = ventas;
 
   // Las alertas finales, con todas las compras y recetas ya aplicadas
   resumen.alertas = await recalcularCostos();
@@ -1779,11 +2112,15 @@ async function pantallaRecetas(cont) {
   const productos = state.productos.filter((p) => p.activo);
   const recetas = agrupar(await db.from('receta_item').select(), 'producto_id');
 
+  // El alta pide precio, y el precio es de quien puede cambiar precios
+  const puedeAlta = auth.puede('editarPrecios');
+
   if (!productos.length) {
     cont.innerHTML = ui.vacio({
       modulo: 'produccion', icono: '\u{1F4D6}', titulo: 'Sin productos',
       texto: 'Primero tienen que existir los productos para poder darles receta.',
     });
+    if (puedeAlta) fab(cont, modalNuevoProducto, 'Nuevo producto');
     return;
   }
 
@@ -1795,6 +2132,65 @@ async function pantallaRecetas(cont) {
 
   cont.querySelectorAll('[data-receta]').forEach((el) =>
     el.addEventListener('click', () => editorReceta(el.dataset.receta, recetas.get(el.dataset.receta) || [])));
+
+  if (puedeAlta) fab(cont, modalNuevoProducto, 'Nuevo producto');
+}
+
+/**
+ * Alta de producto. Pide lo mínimo para que exista: nombre, rubro y precio.
+ * El costo y la paga salen de la receta, así que al guardar se abre el editor
+ * de receta del producto recién creado: es el paso que sigue siempre.
+ */
+function modalNuevoProducto() {
+  const rubros = [...new Set(state.productos.map((p) => p.categoria).filter(Boolean))].sort();
+
+  ui.abrirModal(`
+    <h3>Nuevo producto</h3>
+    <div class="stack">
+      <div class="field">
+        <label for="np-nombre">Nombre</label>
+        <input class="input" id="np-nombre" autocomplete="off" placeholder="Empanada de roquefort">
+      </div>
+      <div class="field">
+        <label for="np-rubro">Rubro</label>
+        <input class="input" id="np-rubro" list="np-rubros" autocomplete="off" placeholder="Empanadas">
+        <datalist id="np-rubros">${rubros.map((r) => `<option value="${ui.esc(r)}">`).join('')}</datalist>
+      </div>
+      <div class="row">
+        <div class="field grow">
+          <label for="np-precio">Precio de venta</label>
+          <input class="input" id="np-precio" type="number" inputmode="decimal" step="any" min="0">
+        </div>
+        <div class="field grow">
+          <label for="np-minimo">Stock mínimo</label>
+          <input class="input" id="np-minimo" type="number" inputmode="numeric" min="0" value="0">
+        </div>
+      </div>
+      <p class="faint" style="margin:0">Nace sin stock y sin costo. Después de guardarlo
+        se abre su receta: de ahí sale el costo y lo que se paga por unidad.</p>
+      <p class="faint" id="np-error" style="color:var(--danger);margin:0"></p>
+      <button class="btn btn--primary btn--block" data-accent="produccion" id="np-ok">Guardar producto</button>
+    </div>
+  `, (root) => {
+    alGuardar(root.querySelector('#np-ok'), async () => {
+      const error = root.querySelector('#np-error');
+      error.textContent = '';
+      try {
+        const creado = await crearProducto({
+          nombre: root.querySelector('#np-nombre').value,
+          categoria: root.querySelector('#np-rubro').value || 'Otros',
+          precio_venta: root.querySelector('#np-precio').value,
+          stock_minimo: root.querySelector('#np-minimo').value,
+        });
+        ui.cerrarModal();
+        await refrescar();
+        ui.toast(`${creado.nombre} creado`);
+        editorReceta(creado.id, []);
+      } catch (e) {
+        error.textContent = e.message;
+      }
+    });
+  });
 }
 
 function filaReceta(p, receta) {
@@ -1827,6 +2223,7 @@ function filaReceta(p, receta) {
 function editorReceta(productoId, recetaOriginal) {
   const p = state.productoPorId(productoId);
   const soloLectura = !gestiona();
+  const editaPrecio = auth.puede('editarPrecios');
 
   // Copia de trabajo: nada se guarda hasta apretar Guardar
   let lineas = recetaOriginal.map((r) => ({
@@ -1847,6 +2244,13 @@ function editorReceta(productoId, recetaOriginal) {
 
   ui.abrirModal(`
     <h3>${ui.esc(p.nombre)}</h3>
+    ${editaPrecio ? `
+      <div class="field" style="margin-bottom:var(--sp-4)">
+        <label for="r-precio">Precio de venta</label>
+        <input class="input" id="r-precio" type="number" inputmode="decimal" step="any" min="0"
+               value="${p.precio_venta ?? ''}">
+        <span class="faint">Rige desde el próximo pedido: lo ya vendido conserva su precio.</span>
+      </div>` : ''}
     <div class="field" style="margin-bottom:var(--sp-4)">
       <label for="r-rinde">Una vuelta de receta rinde</label>
       <input class="input" id="r-rinde" type="number" inputmode="numeric" min="1" value="${rinde}" ${soloLectura ? 'disabled' : ''}>
@@ -1897,6 +2301,8 @@ function editorReceta(productoId, recetaOriginal) {
 
     const campoPago = root.querySelector('#r-pago');
     const pagoActual = () => (campoPago.value === '' ? null : Number(campoPago.value));
+    const campoPrecio = root.querySelector('#r-precio');
+    const precioActual = () => (campoPrecio && campoPrecio.value !== '' ? Number(campoPrecio.value) : (p.precio_venta || 0));
 
     function pintarCosto() {
       if (!verCostos()) { salida.innerHTML = '<span class="faint">Merma en % · el costo lo ve la administración</span>'; return; }
@@ -1917,17 +2323,19 @@ function editorReceta(productoId, recetaOriginal) {
 
       const paga = pagoActual() || 0;
       const costo = materiales + paga;
-      const m = calc.margen(p.precio_venta || 0, costo);
-      const flojo = p.precio_venta > 0 && m.pct < calc.MARGEN_MINIMO;
+      const precio = precioActual();
+      const m = calc.margen(precio, costo);
+      const flojo = precio > 0 && m.pct < calc.MARGEN_MINIMO;
       salida.innerHTML = `
         <div>Cuesta <b class="num">${ui.money(costo)}</b> por unidad</div>
         <div class="faint">Materiales <span class="num">${ui.money(materiales)}</span>${lineas.length ? '' : ' (costo manual)'}
           + paga <span class="num">${ui.money(paga)}</span></div>
-        ${p.precio_venta > 0 ? `<div class="faint">Se vende a <span class="num">${ui.money(p.precio_venta)}</span> ·
+        ${precio > 0 ? `<div class="faint">Se vende a <span class="num">${ui.money(precio)}</span> ·
           margen <b class="num ${flojo ? 'danger' : ''}">${ui.pct(m.pct)}</b></div>` : ''}`;
     }
 
     campoPago.addEventListener('input', pintarCosto);
+    campoPrecio?.addEventListener('input', pintarCosto);
 
     cont.addEventListener('input', (e) => {
       const fila = e.target.closest('[data-idx]');
@@ -1964,6 +2372,10 @@ function editorReceta(productoId, recetaOriginal) {
 
     alGuardar(root.querySelector('#r-guardar'), async () => {
       try {
+        // El precio primero: así la alerta de margen de la receta ya lo usa
+        if (campoPrecio && campoPrecio.value !== '' && Number(campoPrecio.value) !== p.precio_venta) {
+          await guardarPrecio(productoId, campoPrecio.value);
+        }
         const alertas = await guardarReceta(productoId, lineas, rinde);
         // La paga va aparte: es plata del equipo, con su propio permiso
         const paga = pagoActual();
