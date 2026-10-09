@@ -624,6 +624,32 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
 }
 .chip.sel { border-color: var(--clientes); color: var(--text); background: var(--surface-2); }
 
+/* Segunda fila de chips que afina la de arriba (el rubro dentro de "Salió"):
+   más chica para que se lea como subordinada y no como otro filtro al mismo nivel */
+.chips--sub { margin: 0 0 var(--sp-3); }
+.chips--sub .chip { min-height: 38px; padding: 0 12px; font-size: .8rem; }
+
+/* Desde · hasta en una línea. Dos columnas iguales con min-width 0: el input
+   date trae un ancho mínimo propio que a 390px empuja la pantalla de costado */
+.rango-fechas {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.rango-fechas .input { width: 100%; }
+
+/* Comparativa del cierre: la semana contra la anterior y contra el promedio */
+.comparativa h3 { font-size: .95rem; }
+.comparativa__grilla {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: var(--sp-4); row-gap: var(--sp-2);
+  align-items: baseline; margin-top: var(--sp-3);
+}
+.comparativa__grilla > :nth-child(3n+2),
+.comparativa__grilla > :nth-child(3n) { text-align: right; }
+.comparativa__col { color: var(--text-faint); font-size: .72rem; line-height: 1.2; }
+.comparativa__etiqueta { color: var(--text-dim); }
+.comparativa__nota { margin-top: var(--sp-3); font-size: .8rem; }
+
 .medios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: var(--sp-4) 0; }
 .medio {
   min-height: 78px; padding: 11px 6px;
@@ -679,3 +705,11 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
 /* El botón del aviso va más chico que el resto: comparte una barra angosta con
    el texto y la cruz, y a 360px un .btn de alto completo la parte en dos. */
 .aviso-version .btn { flex: none; padding: var(--sp-2) var(--sp-3); font-size: .85rem; }
+
+/* ---------- Reparto de una línea de producción ---------- */
+
+/* Quién hizo cada cosa al cerrar la orden. La primera fila se lleva "el resto",
+   que ocupa el lugar del número para que las filas queden alineadas. */
+.reparto__fila { gap: var(--sp-2); }
+.reparto__fila .input.grow { flex: 1; min-width: 0; }
+.reparto__resto { width: 86px; flex: none; text-align: right; }

@@ -150,7 +150,11 @@ auth.rol = 'admin'; auth.trabajadoraId = null; await state.cargar();
 console.log('\n── confirmar y liquidar');
 
 const V = '2026-06-05';
-const j = await eq.marcarJornada(ana.id, V);
+// Una jornada de antes de cobrar por producción, con su tarifa congelada
+const j = { jornada: await db.from('jornada').insert({
+  trabajadora_id: ana.id, fecha: V, orden_produccion_id: null, tarifa_aplicada: 5000,
+  origen_carga: 'admin', confirmada: true, estado_pago: 'pendiente',
+}) };
 await eq.liquidarSemana('2026-06-01', '2026-06-07');
 
 err = await tira(() => eq.confirmarJornada(j.jornada.id, false));
@@ -162,26 +166,29 @@ t('la jornada sigue confirmada y pagada',
 
 const egresos = await db.from('movimiento_caja').select().eq('origen', 'jornal');
 t('la liquidación dejó UN solo egreso', egresos.length === 1);
+t('y pagó la tarifa congelada del histórico', egresos[0].monto === 5000);
 
 /* ================================================================== */
-console.log('\n── tarifa de una jornada retroactiva');
+console.log('\n── la tarifa de la ficha ya no paga nada');
 
-/* Ana no tiene fila en tarifa_historica (viene del seed). Le suben la tarifa
-   y recién después cargan una jornada olvidada del mes pasado: antes se
-   pagaba con la tarifa NUEVA, que es justo lo que tarifa_historica evita. */
+/* Desde octubre de 2026 se cobra por producción. Una trabajadora que viene de
+   antes conserva su tarifa_dia en la ficha —explica sus jornadas pagadas—,
+   pero una jornada nueva no la toma: es asistencia. */
 const nuevaT = await db.from('trabajadora').insert({
   unidad_negocio_id: state.unidadNegocio.id,
   nombre: 'Rosa', tarifa_dia: 5000, fecha_ingreso: '2026-01-10', activa: true,
 });
 await state.cargar();
 
-await eq.guardarTrabajadora({ id: nuevaT.id, nombre: 'Rosa', tarifaDia: 9000 });
-const historial = await db.from('tarifa_historica').select().eq('trabajadora_id', nuevaT.id);
-t('el aumento siembra también la tarifa vieja', historial.length === 2);
+await eq.guardarTrabajadora({ id: nuevaT.id, nombre: 'Rosa' });
+t('guardar la ficha no toca la tarifa vieja',
+  (await db.from('trabajadora').select().eq('id', nuevaT.id).single()).tarifa_dia === 5000);
+t('ni siembra historial de tarifas',
+  (await db.from('tarifa_historica').select().eq('trabajadora_id', nuevaT.id)).length === 0);
 
 const retro = await eq.marcarJornada(nuevaT.id, '2026-03-15');
-t('una jornada anterior al aumento se paga con la tarifa vieja',
-  retro.jornada.tarifa_aplicada === 5000);
+t('una jornada nueva no lleva plata aunque la ficha tenga tarifa', retro.jornada.tarifa_aplicada === 0);
+await eq.marcarJornada(nuevaT.id, '2026-03-15');   // limpieza
 
 t('tarifaVigente no cae a la tarifa de hoy si la fecha es más vieja que todo',
   calc.tarifaVigente([{ tarifa_dia: 5000, vigente_desde: '2026-05-01' }], '2026-01-01', 99999) === 5000);
@@ -190,13 +197,18 @@ t('tarifaVigente no cae a la tarifa de hoy si la fecha es más vieja que todo',
 console.log('\n── la que dejó de trabajar igual cobra lo suyo');
 
 const S1 = '2026-04-06', S2 = '2026-04-12';
-await eq.marcarJornada(nuevaT.id, S1);
+await db.from('pago_produccion').insert({
+  trabajadora_id: nuevaT.id, orden_produccion_id: 'o-vieja', produccion_item_id: 'i-vieja',
+  producto_id: state.productos[0].id, fecha: S1, cantidad: 24, pago_unitario: 40, total: 960,
+  origen_carga: 'admin', confirmada: true, estado_pago: 'pendiente', fecha_pago: null,
+});
 await db.from('trabajadora').update({ activa: false }).eq('id', nuevaT.id);
 await state.cargar();
 
 const resumen = await eq.resumenSemana(S1, S2);
 const filaRosa = resumen.filas.find((f) => f.trabajadora.id === nuevaT.id);
 t('aparece en el resumen aunque ya no esté activa', !!filaRosa);
+t('con lo que produjo', filaRosa?.unidades === 24 && filaRosa?.pendiente === 960);
 
 const liq = await eq.liquidarSemana(S1, S2);
 t('lo que muestra el resumen es lo que se paga', liq.total === resumen.pendiente);
@@ -454,12 +466,13 @@ await prod.guardarReceta(emp2.id, [
   { insumo_id: har.id, cantidad: 1, unidad_medida: 'kg', merma_pct: 0 },
 ], 24);
 await db.from('insumo').update({ stock_actual: 20, costo_unitario: 1000 }).eq('id', har.id);
+await prod.fijarPagoProduccion(emp2.id, 40);
 
 const o1 = await prod.crearOrden({ items: [{ producto_id: emp2.id, cantidad: 48 }] });
 const harAntes = (await db.from('insumo').select().eq('id', har.id).single()).stock_actual;
 await prod.cerrarOrden(o1.id, Object.fromEntries(
   (await db.from('produccion_item').select().eq('orden_produccion_id', o1.id)).map((i) => [i.id, 36]),
-));
+), { productoras: ana.id });
 const harDespues = (await db.from('insumo').select().eq('id', har.id).single()).stock_actual;
 
 t('descuenta el insumo de lo planificado aunque salga menos',
@@ -467,17 +480,24 @@ t('descuenta el insumo de lo planificado aunque salga menos',
 
 const o2 = await prod.crearOrden({ items: [{ producto_id: emp2.id, cantidad: 24 }] });
 const stockProdAntes = (await db.from('producto').select().eq('id', emp2.id).single()).stock_actual;
-await Promise.allSettled([prod.cerrarOrden(o2.id, {}), prod.cerrarOrden(o2.id, {})]);
+await Promise.allSettled([
+  prod.cerrarOrden(o2.id, {}, { productoras: ana.id }),
+  prod.cerrarOrden(o2.id, {}, { productoras: ana.id }),
+]);
 const stockProdDespues = (await db.from('producto').select().eq('id', emp2.id).single()).stock_actual;
 
 t('cerrar dos veces en paralelo no duplica el producto terminado',
   stockProdDespues - stockProdAntes === 24);
 t('y deja un solo movimiento de stock de producción',
   (await db.from('movimiento_stock_producto').select().eq('referencia_id', o2.id)).length === 1);
+t('ni le paga dos veces a quien la produjo',
+  (await db.from('pago_produccion').select().eq('orden_produccion_id', o2.id)).length === 1);
+t('se paga lo que salió, no lo planificado',
+  (await db.from('pago_produccion').select().eq('orden_produccion_id', o1.id))[0]?.total === 36 * 40);
 
 const o3 = await prod.crearOrden({ items: [{ producto_id: emp2.id, cantidad: 24 }] });
 const item3 = (await db.from('produccion_item').select().eq('orden_produccion_id', o3.id))[0];
-err = await tira(() => prod.cerrarOrden(o3.id, { [item3.id]: -24 }));
+err = await tira(() => prod.cerrarOrden(o3.id, { [item3.id]: -24 }, { productoras: ana.id }));
 t('una cantidad negativa no cierra la orden', !!err);
 t('y la orden queda como estaba, no trabada',
   (await db.from('orden_produccion').select().eq('id', o3.id).single()).estado === 'planificada');
