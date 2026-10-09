@@ -350,6 +350,207 @@ export async function resumenSemana(desde, hasta) {
 }
 
 /* ================================================================== */
+/*  Liquidaciones pagadas — histórico y comprobante                    */
+/* ================================================================== */
+
+/**
+ * Las liquidaciones ya pagadas: una por trabajadora y por fecha de pago, la
+ * más nueva primero. Ya filtradas por rol.
+ *
+ * No hay tabla `liquidacion` y no hace falta: liquidarSemana() le pone la
+ * misma `fecha_pago` a todo el lote, así que (trabajadora, fecha_pago) es la
+ * liquidación tal como la vivió quien cobró. Si a la misma persona se le
+ * pagan dos lotes el mismo día, salen juntos en un comprobante: es la plata
+ * que recibió ese día, y eso es lo que tiene que decir el papel.
+ *
+ * Sale de las jornadas y no de `movimiento_caja` por dos razones: el egreso es
+ * uno solo por todo el equipo (regla 6) y no dice cuánto fue de cada una; y una
+ * trabajadora no ve la caja (regla 8), pero sus jornadas sí.
+ *
+ * El monto es la suma de `tarifa_aplicada`, la congelada en cada jornada. Nunca
+ * la tarifa de hoy (regla 4): si a alguien le suben la tarifa, lo que cobró en
+ * julio sigue diciendo lo que cobró en julio.
+ */
+export async function liquidacionesPagadas({ trabajadoraId = null } = {}) {
+  // filtrarPropio va antes que nada: lo que no pasa de acá no existe para la
+  // pantalla, ni para el comprobante, ni para el texto de WhatsApp
+  let pagadas = auth.filtrarPropio(
+    await db.from('jornada').select().eq('estado_pago', 'pagada'),
+  );
+  if (trabajadoraId) pagadas = pagadas.filter((j) => j.trabajadora_id === trabajadoraId);
+
+  // El admin necesita también a las que ya no trabajan: cobraron igual. Una
+  // trabajadora no pide la lista del equipo, solo su propia ficha.
+  const fichas = esAdmin()
+    ? await db.from('trabajadora').select()
+    : await db.from('trabajadora').select().eq('id', auth.trabajadoraId);
+  const porId = new Map(fichas.map((t) => [t.id, t]));
+
+  const grupos = new Map();
+  for (const j of pagadas) {
+    const clave = `${j.trabajadora_id}|${j.fecha_pago || ''}`;
+    if (!grupos.has(clave)) grupos.set(clave, []);
+    grupos.get(clave).push(j);
+  }
+
+  return [...grupos.values()].map((jornadas) => {
+    jornadas.sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const ficha = porId.get(jornadas[0].trabajadora_id);
+    return {
+      trabajadora_id: jornadas[0].trabajadora_id,
+      nombre: ficha?.nombre || '—',
+      telefono: ficha?.telefono || '',
+      fecha_pago: jornadas[0].fecha_pago,
+      desde: jornadas[0].fecha,
+      hasta: jornadas[jornadas.length - 1].fecha,
+      dias: jornadas.length,
+      total: jornadas.reduce((a, j) => a + (j.tarifa_aplicada || 0), 0),
+      jornadas: jornadas.map((j) => ({ fecha: j.fecha, tarifa_aplicada: j.tarifa_aplicada || 0 })),
+    };
+  }).sort((a, b) => (b.fecha_pago || '').localeCompare(a.fecha_pago || '')
+                 || a.nombre.localeCompare(b.nombre));
+}
+
+/**
+ * Una liquidación puntual, para el comprobante.
+ *
+ * Valida de nuevo aunque liquidacionesPagadas() ya filtre: el botón de la
+ * pantalla lleva el id en un data-attribute, y desde la consola se puede
+ * llamar con cualquiera. Mismo criterio que marcarJornada().
+ */
+export async function comprobanteLiquidacion(trabajadoraId, fechaPago) {
+  if (!esAdmin() && trabajadoraId !== auth.trabajadoraId) {
+    throw new Error('Solo podés ver tus propias liquidaciones');
+  }
+  const liq = (await liquidacionesPagadas({ trabajadoraId }))
+    .find((l) => l.fecha_pago === fechaPago);
+  if (!liq) throw new Error('No hay una liquidación pagada ese día');
+  return liq;
+}
+
+/* --- el comprobante en sí --- */
+
+const PIE_COMPROBANTE = 'Manos Libres · Cocina comunitaria del CIC Barrio Movediza · '
+  + 'Federación de Organizaciones Sociales «Mesa Solidaria Tandil»';
+
+/** dd/mm/aaaa. ui.fecha() no lleva año y un comprobante sin año no sirve. */
+function fechaCompleta(iso) {
+  const [a, m, d] = String(iso || '').split('-').map(Number);
+  if (!a || !m || !d) return '—';
+  return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${a}`;
+}
+
+function nombreDia(iso) {
+  const [a, m, d] = iso.split('-').map(Number);
+  return NOMBRE_DIA[(new Date(a, m - 1, d).getDay() + 6) % 7];
+}
+
+/** "3 × $5.000 + 2 × $8.000", desde las tarifas congeladas. */
+function desgloseLiquidacion(liq) {
+  const porTarifa = new Map();
+  for (const j of liq.jornadas) porTarifa.set(j.tarifa_aplicada, (porTarifa.get(j.tarifa_aplicada) || 0) + 1);
+  return [...porTarifa.entries()].map(([tarifa, dias]) => `${dias} × ${ui.money(tarifa)}`).join(' + ');
+}
+
+/**
+ * El comprobante en texto plano, para mandar por WhatsApp.
+ *
+ * Dice "comprobante de pago de jornadas" y nada más. No es un recibo de
+ * sueldo ni dice que haya trabajo registrado: el vínculo laboral todavía no
+ * está formalizado (CLAUDE.md) y un papel que lo sugiera sería mentir.
+ */
+export function textoComprobante(liq) {
+  return [
+    'Manos Libres · Comprobante de pago de jornadas',
+    '',
+    liq.nombre,
+    `Pagado el ${fechaCompleta(liq.fecha_pago)}`,
+    `Jornadas del ${fechaCompleta(liq.desde)} al ${fechaCompleta(liq.hasta)}: ${liq.dias}`,
+    desgloseLiquidacion(liq),
+    `Total cobrado: ${ui.money(liq.total)}`,
+    '',
+    'Federación de Organizaciones Sociales «Mesa Solidaria Tandil»',
+  ].join('\n');
+}
+
+/**
+ * Link de wa.me con el texto ya cargado.
+ *
+ * Con un celular argentino de 10 dígitos (área + número, sin 0 ni 15) se arma
+ * el 549 adelante. Si el teléfono viene de otra forma no se adivina: sin
+ * número, WhatsApp abre para elegir el contacto, que es mejor que mandarle el
+ * comprobante a un desconocido por un dígito mal interpretado.
+ */
+export function linkWhatsApp(texto, telefono = '') {
+  let num = String(telefono || '').replace(/\D/g, '');
+  if (num.startsWith('0')) num = num.slice(1);
+  if (num.length === 10) num = `549${num}`;
+  else if (!(num.startsWith('549') && num.length === 13)) num = '';
+  return `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
+}
+
+/** El cuerpo HTML del comprobante para imprimir. */
+export function htmlComprobante(liq) {
+  return `
+    <h1>Comprobante de pago de jornadas</h1>
+    <p class="sub">Pagado el ${fechaCompleta(liq.fecha_pago)}</p>
+
+    <table>
+      <tr><td>Nombre</td><td class="n">${ui.esc(liq.nombre)}</td></tr>
+      <tr><td>Jornadas</td><td class="n">${fechaCompleta(liq.desde)} al ${fechaCompleta(liq.hasta)}</td></tr>
+    </table>
+
+    <h2>Detalle</h2>
+    <table>
+      ${liq.jornadas.map((j) => `
+        <tr><td>${nombreDia(j.fecha)} ${fechaCompleta(j.fecha)}</td><td class="n">${ui.money(j.tarifa_aplicada)}</td></tr>
+      `).join('')}
+      <tr class="total"><td>Total cobrado · ${liq.dias} ${liq.dias === 1 ? 'jornada' : 'jornadas'}</td>
+        <td class="n">${ui.money(liq.total)}</td></tr>
+    </table>
+
+    <div class="firma">
+      <div><span></span>Recibí conforme</div>
+      <div><span></span>Aclaración</div>
+    </div>`;
+}
+
+/**
+ * Ventana de impresión del navegador: de ahí sale "Guardar como PDF".
+ *
+ * Es la misma idea que ventanaImpresion() de caja.js, copiada y no importada:
+ * aquella no se exporta y es de otro módulo. Si aparece un tercer papel para
+ * imprimir, conviene mudar las dos a ui.js.
+ *
+ * Recibe la ventana ya abierta: ver clickComprobante().
+ */
+function imprimirComprobante(liq, w) {
+  w.document.write(`
+    <!doctype html><html lang="es"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Comprobante · ${ui.esc(liq.nombre)} · ${fechaCompleta(liq.fecha_pago)}</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px; color: #111; }
+      h1 { font-size: 20px; margin: 0 0 2px; }
+      .sub { color: #666; margin: 0 0 24px; font-size: 14px; }
+      h2 { font-size: 15px; margin: 24px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      td { padding: 5px 0; }
+      td.n { text-align: right; font-variant-numeric: tabular-nums; }
+      tr.total td { border-top: 1px solid #333; font-weight: 700; padding-top: 8px; }
+      .firma { display: flex; gap: 32px; margin-top: 64px; font-size: 13px; color: #444; }
+      .firma div { flex: 1; text-align: center; }
+      .firma span { display: block; border-top: 1px solid #333; margin-bottom: 4px; }
+      .pie { margin-top: 32px; color: #888; font-size: 12px; }
+    </style></head><body>${htmlComprobante(liq)}
+    <p class="pie">${PIE_COMPROBANTE} · emitido el ${fechaCompleta(ui.hoyISO())}</p>
+    </body></html>`);
+  w.document.close();
+  w.focus();
+  w.print();
+}
+
+/* ================================================================== */
 /*  Vista                                                              */
 /* ================================================================== */
 
@@ -368,7 +569,10 @@ export async function render(vista) {
     return;
   }
 
-  const resumen = await resumenSemana(fechas[0], fechas[6]);
+  const [resumen, liquidaciones] = await Promise.all([
+    resumenSemana(fechas[0], fechas[6]),
+    liquidacionesPagadas(),
+  ]);
 
   // Todo cuelga de un nodo propio, no de `vista`.
   // `vista` es el <section> permanente del shell: los listeners colgados ahí
@@ -387,7 +591,7 @@ export async function render(vista) {
       </div>
 
       ${resumen.filas.map((f) => tarjeta(f, fechas)).join('')}
-      ${esAdmin() ? bloqueLiquidacion(resumen) : bloquePropio(resumen)}
+      ${esAdmin() ? bloqueLiquidacion(resumen, liquidaciones) : bloquePropio(resumen) + bloqueCobrado(liquidaciones)}
     </div>
   `;
 
@@ -419,6 +623,9 @@ export async function render(vista) {
     if (edit) return modalTrabajadora(state.trabajadoraPorId(edit.dataset.editar), vista);
 
     if (e.target.closest('#liquidar')) return abrirLiquidacion(fechas, resumen, vista);
+
+    if (e.target.closest('[data-historial]')) return abrirHistorial(liquidaciones);
+    if (await clickComprobante(e)) return;
   });
 
   if (esAdmin()) fab(vista, () => modalTrabajadora(null, vista));
@@ -478,7 +685,7 @@ function tarjeta(f, fechas) {
     </div>`;
 }
 
-function bloqueLiquidacion(resumen) {
+function bloqueLiquidacion(resumen, liquidaciones = []) {
   return `
     <div class="card" data-accent="trabajadoras" style="margin-top:var(--sp-4)">
       <div class="between">
@@ -498,6 +705,10 @@ function bloqueLiquidacion(resumen) {
         style="margin-top:var(--sp-3)" ${resumen.pendiente <= 0 ? 'disabled' : ''}>
         ${resumen.pendiente > 0 ? 'Liquidar semana' : 'Semana liquidada'}
       </button>
+      ${liquidaciones.length ? `
+        <button class="btn btn--ghost btn--block" data-historial style="margin-top:var(--sp-2)">
+          Liquidaciones pagadas · comprobantes
+        </button>` : ''}
     </div>`;
 }
 
@@ -519,6 +730,111 @@ function bloquePropio(resumen) {
           : 'Tocá los días que trabajaste. Quedan pendientes hasta que los confirme la administración.'}
       </p>
     </div>`;
+}
+
+/**
+ * Lo que cobró en semanas anteriores. Solo lo suyo: `liquidaciones` ya viene
+ * pasada por filtrarPropio() desde liquidacionesPagadas().
+ *
+ * Se muestran las últimas cuatro; el resto, en el modal. Es la pregunta que
+ * se hace con el celular en la mano ("¿me pagaron lo del martes?") y no hace
+ * falta bajar por todo el año para contestarla.
+ */
+const COBRADO_A_LA_VISTA = 4;
+
+function bloqueCobrado(liquidaciones) {
+  if (!liquidaciones.length) return '';
+  const recientes = liquidaciones.slice(0, COBRADO_A_LA_VISTA);
+  return `
+    <div class="bloque">
+      <div class="bloque__titulo">Lo que cobraste</div>
+      ${listaLiquidaciones(recientes)}
+      ${liquidaciones.length > recientes.length ? `
+        <button class="btn btn--ghost btn--block" data-historial style="margin-top:var(--sp-2)">
+          Ver todo (${liquidaciones.length})
+        </button>` : ''}
+    </div>`;
+}
+
+/**
+ * Las filas del histórico. El admin las ve agrupadas por día de pago y con el
+ * nombre de cada una; una trabajadora, en lista simple, que de todas formas
+ * son solo las suyas.
+ */
+function listaLiquidaciones(liqs) {
+  if (!esAdmin()) return `<div class="lista">${liqs.map((l) => filaLiquidacion(l)).join('')}</div>`;
+
+  const porFecha = new Map();
+  for (const l of liqs) {
+    if (!porFecha.has(l.fecha_pago)) porFecha.set(l.fecha_pago, []);
+    porFecha.get(l.fecha_pago).push(l);
+  }
+  return [...porFecha.entries()].map(([fecha, delDia]) => `
+    <div class="grupo">
+      <div class="grupo__titulo">
+        Pagado el ${fechaCompleta(fecha)}
+        <span class="grupo__cuenta num">${ui.money(delDia.reduce((a, l) => a + l.total, 0))}</span>
+      </div>
+      <div class="lista">${delDia.map((l) => filaLiquidacion(l, { conNombre: true })).join('')}</div>
+    </div>`).join('');
+}
+
+function filaLiquidacion(l, { conNombre = false } = {}) {
+  // El teléfono solo lo usa el admin para mandárselo a ella. A una trabajadora
+  // el link le abre WhatsApp para elegir a quién reenviarlo.
+  const wa = linkWhatsApp(textoComprobante(l), conNombre ? l.telefono : '');
+  return `
+    <div class="liquidacion">
+      <div class="fila">
+        <div class="fila__main">
+          <div class="fila__titulo">${conNombre ? ui.esc(l.nombre) : `Pagado el ${fechaCompleta(l.fecha_pago)}`}</div>
+          <div class="fila__meta">
+            <span>${l.dias} ${l.dias === 1 ? 'jornada' : 'jornadas'}</span>
+            <span class="dim">·</span>
+            <span>${ui.fecha(l.desde)}${l.desde !== l.hasta ? ` – ${ui.fecha(l.hasta)}` : ''}</span>
+          </div>
+        </div>
+        <div class="fila__lado"><b class="num">${ui.money(l.total)}</b></div>
+      </div>
+      <div class="acciones">
+        <button class="btn" data-comprobante="${ui.esc(l.trabajadora_id)}"
+          data-fecha-pago="${ui.esc(l.fecha_pago)}">Comprobante</button>
+        <a class="btn" href="${ui.esc(wa)}" target="_blank" rel="noopener">WhatsApp</a>
+      </div>
+    </div>`;
+}
+
+function abrirHistorial(liqs, titulo = 'Liquidaciones pagadas') {
+  ui.abrirModal(`
+    <h3>${ui.esc(titulo)}</h3>
+    <p class="faint" style="margin-top:calc(var(--sp-2) * -1)">
+      Comprobante abre la impresión: desde ahí se guarda como PDF.
+    </p>
+    <div style="margin-top:var(--sp-3)">${listaLiquidaciones(liqs)}</div>
+    <button class="btn btn--ghost btn--block" data-close style="margin-top:var(--sp-2);border:none">Cerrar</button>
+  `, (root) => root.addEventListener('click', clickComprobante));
+}
+
+/**
+ * La ventana se abre ANTES de ir a buscar el dato, sincrónica con el toque.
+ * Safari en el celular bloquea un window.open que llega después de un await:
+ * para él ya no es una acción de la persona sino un popup.
+ */
+async function clickComprobante(e) {
+  const b = e.target.closest('[data-comprobante]');
+  if (!b) return false;
+  const w = window.open('', '_blank');
+  if (!w) {
+    ui.toast('El navegador bloqueó la ventana de impresión', true);
+    return true;
+  }
+  try {
+    imprimirComprobante(await comprobanteLiquidacion(b.dataset.comprobante, b.dataset.fechaPago), w);
+  } catch (err) {
+    w.close();
+    ui.toast(err.message, true);
+  }
+  return true;
 }
 
 async function toggleDia(btn, vista) {
@@ -601,6 +917,11 @@ function abrirLiquidacion(fechas, resumen, vista) {
         ui.cerrarModal();
         ui.toast(`Liquidado ${ui.money(r.total)} · ${r.jornadas} jornadas`);
         await render(vista);
+        // Recién pagado es cuando se entrega el comprobante: se ofrecen ahí
+        // mismo, sin tener que ir a buscarlos al histórico
+        const hoy = ui.hoyISO();
+        const deHoy = (await liquidacionesPagadas()).filter((l) => l.fecha_pago === hoy);
+        if (deHoy.length) abrirHistorial(deHoy, 'Comprobantes de hoy');
       } catch (err) {
         e.target.disabled = false;
         e.target.textContent = 'Confirmar pago';

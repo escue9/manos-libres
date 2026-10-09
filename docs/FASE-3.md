@@ -104,6 +104,57 @@ editar, y que los 7 botones de día apunten todos a ella.
 
 ## Pendiente
 
-- [ ] Comprobante de liquidación por trabajadora para imprimir o mandar
-- [ ] Ver el histórico de liquidaciones pagadas
-- [ ] Que la trabajadora vea cuánto cobró en semanas anteriores
+- [x] Comprobante de liquidación por trabajadora para imprimir o mandar
+- [x] Ver el histórico de liquidaciones pagadas
+- [x] Que la trabajadora vea cuánto cobró en semanas anteriores
+
+---
+
+## Addendum — histórico y comprobantes
+
+Los tres pendientes salieron juntos porque son la misma cosa vista desde dos
+lados: qué se pagó, a quién y cuándo.
+
+**Qué hay.** El admin tiene, debajo de "Liquidar semana", el botón
+*Liquidaciones pagadas · comprobantes*: el histórico agrupado por día de pago,
+con el nombre y el total de cada una. Al confirmar una liquidación se abren
+solos los comprobantes de hoy, que es cuando se entregan. La trabajadora ve en
+su pantalla el bloque *Lo que cobraste* con sus últimas cuatro liquidaciones
+(el resto en "Ver todo"). Cada fila tiene dos botones: **Comprobante**, que abre
+la ventana de impresión del navegador (de ahí sale "Guardar como PDF"), y
+**WhatsApp**, un link `wa.me` con el comprobante en texto.
+
+**Decisiones:**
+
+- **Sin tablas ni columnas nuevas.** Una liquidación es (trabajadora,
+  `fecha_pago`): `liquidarSemana()` ya le pone la misma fecha a todo el lote.
+  Si a una persona se le pagan dos lotes el mismo día, salen en un solo
+  comprobante — es la plata que recibió ese día. Hay test.
+- **Sale de las jornadas, no de la caja.** El egreso de `movimiento_caja` es uno
+  por todo el equipo y no dice cuánto fue de cada una, y la trabajadora no ve
+  la caja. Un test verifica que la suma del histórico cuadra con los egresos.
+- **El monto es `tarifa_aplicada` (regla 4).** Subirle la tarifa a alguien no
+  mueve lo que ya cobró; el comprobante lista cada jornada con su tarifa
+  congelada. Hay test.
+- **Privacidad (regla 8).** `liquidacionesPagadas()` pasa por
+  `auth.filtrarPropio()` antes que nada, y `comprobanteLiquidacion()` vuelve a
+  validar el id: desde la consola, una trabajadora no saca el de otra.
+- **WhatsApp.** El admin lo manda al teléfono de la ficha si es un celular
+  argentino reconocible (10 dígitos → `549…`); si no, el link abre para elegir
+  contacto en vez de adivinar. La trabajadora no lleva número: lo reenvía a
+  quien quiera.
+- **Qué dice el papel.** "Comprobante de pago de jornadas", con línea de
+  "Recibí conforme". No dice recibo de sueldo, trabajo registrado ni nada que
+  sugiera relación de dependencia: el vínculo todavía no está formalizado. El
+  pie es de la Federación de Organizaciones Sociales «Mesa Solidaria Tandil».
+- **La ventana de impresión es una copia de la de `caja.js`**, no un import: la
+  de caja no se exporta. Si aparece un tercer papel, conviene mudar las dos a
+  `ui.js`. Se abre sincrónica con el toque, antes de leer la base: Safari en el
+  celular bloquea un `window.open` que llega después de un `await`.
+
+**Tests nuevos:** 25 casos en `fase-3.test.mjs` (histórico, regla 4, texto del
+comprobante, link de WhatsApp, vista de trabajadora, dos pagos el mismo día) y,
+en `privacidad.test.mjs`, el render real de *Lo que cobraste* con jsdom: que no
+aparezca lo cobrado por otra, que todos los botones de comprobante apunten a
+ella, que el texto de WhatsApp no traiga datos ajenos ni número, y que el
+comprobante impreso lleve su nombre y el pie de la Federación.

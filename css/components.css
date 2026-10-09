@@ -481,6 +481,12 @@ body.con-login { overflow: hidden; }
   font-size: .88rem;
 }
 
+/* Una fila con sus dos acciones debajo, a lo ancho: a 390px dos botones al
+   costado de un monto no entran con el tamaño de dedo que piden */
+.acciones { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin-top: var(--sp-2); }
+.acciones .btn { padding: 0 var(--sp-2); text-decoration: none; }
+.liquidacion + .liquidacion { margin-top: var(--sp-3); }
+
 /* ---------- Bloques dentro de un modal ---------- */
 
 .bloque { margin-top: var(--sp-5); }

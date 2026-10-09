@@ -254,5 +254,93 @@ t('y deja afuera las que no lo están',
   cierre.costoLaboral < jornadasSem.reduce((a, j) => a + j.tarifa_aplicada, 0)
   || jornadasSem.every((j) => j.confirmada));
 
+/* ================================================================== */
+console.log('\n── histórico de liquidaciones pagadas');
+
+auth.rol = 'admin';
+auth.trabajadoraId = null;
+const HOY = ui.hoyISO();
+const suma = (js) => js.reduce((a, j) => a + (j.tarifa_aplicada || 0), 0);
+
+const histLiq = await eq.liquidacionesPagadas();
+const pagadasAhora = (await db.from('jornada').select()).filter((j) => j.estado_pago === 'pagada');
+t('una liquidación por trabajadora pagada', histLiq.length === 2);
+t('todas con la fecha en que se pagaron', histLiq.every((l) => l.fecha_pago === HOY));
+
+const liqAna = histLiq.find((l) => l.trabajadora_id === ana.id);
+t('el total de Ana es la suma de sus jornadas pagadas',
+  liqAna.total === suma(pagadasAhora.filter((j) => j.trabajadora_id === ana.id)));
+t('trae el período trabajado', liqAna.desde === L && liqAna.hasta === V);
+t('el histórico cuadra con el egreso de caja',
+  histLiq.reduce((a, l) => a + l.total, 0) === movs[0].monto);
+
+/* Regla 4: a Ana le suben la tarifa después de cobrar. Lo que cobró no se mueve */
+const totalAntes = liqAna.total;
+await eq.guardarTrabajadora({ id: ana.id, nombre: 'Ana', tarifaDia: 20000 });
+const liqAnaDespues = (await eq.liquidacionesPagadas({ trabajadoraId: ana.id }))[0];
+t('subir la tarifa NO recalcula lo ya cobrado', liqAnaDespues.total === totalAntes);
+t('el detalle conserva las dos tarifas congeladas',
+  liqAnaDespues.jornadas.some((j) => j.tarifa_aplicada === 5000)
+  && liqAnaDespues.jornadas.some((j) => j.tarifa_aplicada === 8000)
+  && !liqAnaDespues.jornadas.some((j) => j.tarifa_aplicada === 20000));
+
+/* ================================================================== */
+console.log('\n── comprobante');
+
+const comp = await eq.comprobanteLiquidacion(ana.id, HOY);
+const txt = eq.textoComprobante(comp);
+t('el texto lleva el nombre y el total', txt.includes('Ana') && txt.includes(ui.money(comp.total)));
+t('desglosa por tarifa congelada', txt.includes(`3 × ${ui.money(5000)}`) && txt.includes(`1 × ${ui.money(8000)}`));
+t('firma la Federación «Mesa Solidaria Tandil»', txt.includes('Federación de Organizaciones Sociales «Mesa Solidaria Tandil»'));
+
+const html = eq.htmlComprobante(comp);
+t('el HTML tiene una línea por jornada', (html.match(/<tr><td>/g) || []).length === 2 + comp.dias);
+const papel = (txt + html).toLowerCase();
+t('no dice recibo de sueldo, trabajo registrado ni dependencia',
+  !/sueldo|registrad|dependencia|mirmidones/.test(papel));
+t('un día sin liquidación pagada tira',
+  (await tira(() => eq.comprobanteLiquidacion(ana.id, '2000-01-01'))) !== null);
+
+t('wa.me arma el 549 con un celular de 10 dígitos',
+  eq.linkWhatsApp('hola', '0249 412-3456').startsWith('https://wa.me/5492494123456?text='));
+t('con un teléfono raro no adivina: abre para elegir contacto',
+  eq.linkWhatsApp('hola', '15 412').startsWith('https://wa.me/?text='));
+t('el texto va codificado', !/\s/.test(eq.linkWhatsApp(txt, '')));
+
+/* ================================================================== */
+console.log('\n── histórico desde la trabajadora: solo lo suyo');
+
+auth.rol = 'trabajadora';
+auth.trabajadoraId = maria.id;
+
+const suyas = await eq.liquidacionesPagadas();
+t('ve solo sus liquidaciones', suyas.length === 1 && suyas[0].trabajadora_id === maria.id);
+t('ni el nombre ni el id de Ana', !JSON.stringify(suyas).includes(ana.id) && !JSON.stringify(suyas).includes('Ana'));
+t('pedir las de Ana por parámetro devuelve vacío',
+  (await eq.liquidacionesPagadas({ trabajadoraId: ana.id })).length === 0);
+t('NO puede sacar el comprobante de Ana',
+  (await tira(() => eq.comprobanteLiquidacion(ana.id, HOY))) !== null);
+const compMaria = await eq.comprobanteLiquidacion(maria.id, HOY);
+t('sí el suyo', compMaria.nombre === 'María');
+t('y en el suyo no aparece nadie más',
+  !eq.htmlComprobante(compMaria).includes('Ana') && !eq.textoComprobante(compMaria).includes('Ana'));
+
+/* ================================================================== */
+console.log('\n── dos pagos el mismo día salen en un comprobante');
+
+auth.rol = 'admin';
+auth.trabajadoraId = null;
+await eq.liquidarSemana(L, DOM);   // la jornada de María que se confirmó después
+const histFinal = await eq.liquidacionesPagadas();
+const liqMaria = histFinal.find((l) => l.trabajadora_id === maria.id);
+const egresos = await db.from('movimiento_caja').select().eq('origen', 'jornal');
+t('María sigue teniendo una sola liquidación ese día',
+  histFinal.filter((l) => l.trabajadora_id === maria.id).length === 1);
+t('que suma las jornadas de los dos lotes',
+  liqMaria.dias === (await db.from('jornada').select())
+    .filter((j) => j.trabajadora_id === maria.id && j.estado_pago === 'pagada').length);
+t('y el histórico sigue cuadrando con la caja',
+  histFinal.reduce((a, l) => a + l.total, 0) === egresos.reduce((a, m) => a + m.monto, 0));
+
 console.log(`\n${ok} pasaron · ${mal} fallaron\n`);
 process.exit(mal ? 1 : 0);
