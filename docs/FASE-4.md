@@ -94,7 +94,8 @@ no solo escondiendo el botón.
 
 ## Tests
 
-`node test/fase-4.test.mjs` · 37 casos
+`node test/fase-4.test.mjs` · 68 casos (37 originales, 13 del addendum de
+anulaciones y 18 del de comparativas)
 
 Los que más valen son los que verifican que **no** pase algo:
 
@@ -112,8 +113,92 @@ Los que más valen son los que verifican que **no** pase algo:
 
 ## Pendiente
 
-- [ ] Filtro por rubro dentro de los gastos, cuando haya volumen suficiente
-- [ ] Comparar el cierre contra el promedio de las últimas cuatro semanas, no
-      solo contra la anterior
-- [ ] Editar o anular un movimiento manual cargado con un error de tipeo
-- [ ] Que la rentabilidad permita elegir un rango de fechas arbitrario
+- [x] Filtro por rubro dentro de los gastos — ver el addendum de comparativas
+- [x] Comparar el cierre contra el promedio de las últimas cuatro semanas, no
+      solo contra la anterior — ídem
+- [x] Editar o anular un movimiento manual cargado con un error de tipeo — ver
+      el addendum de abajo
+- [x] Que la rentabilidad permita elegir un rango de fechas arbitrario — ver
+      el addendum de comparativas
+
+---
+
+## Addendum — anular un movimiento manual
+
+Un gasto tipeado con un cero de más no tenía arreglo salvo la consola. Ahora en
+**Movimientos** los manuales vigentes (gasto, aporte, retiro) se tocan y abren
+su detalle con dos salidas: **Anular y cargar corregido** —que abre el alta
+precargada— o **Solo anular**. Las dos piden motivo.
+
+`anularMovimiento(id, motivo)` no borra nada. Deja un contramovimiento del tipo
+opuesto, mismo origen, monto y rubro, con `referencia_id` al original, igual
+que `anularPedido()` con los cobros. No hizo falta migración: el esquema ya
+tenía todo.
+
+**Lleva la fecha del original, no la de hoy.** La devolución de un pedido es
+plata que salió hoy; un error de carga es plata que nunca se movió. Con la
+fecha de hoy, la semana del error seguiría mostrando el gasto falso.
+
+Lo que tuvo que cambiar alrededor para que la anulación no ensucie números:
+
+- `calc.cierreSemanal()` resta los gastos de tipo ingreso, que son anulaciones.
+  Antes sumaba el monto sin mirar el tipo y el gasto anulado contaba doble
+- "Caja de la semana" deja afuera el par anulado: sin eso, un gasto de $85.000
+  anulado inflaba el *entró* y el *salió* en $85.000 cada uno
+- La rendición de cuentas muestra el neto por rubro. Antes, un rubro con los
+  dos sentidos —un cobro y su devolución— mostraba solo el ingreso
+
+Los automáticos (cobro, compra, jornal) no se anulan desde la caja: se deshacen
+desde su origen, o la caja queda descolgada del pedido o la compra.
+
+De paso se corrigió el pie de los reportes impresos, que nombraba a Mirmidones
+como titular, y el texto del reporte de impacto, que decía "trabajo registrado"
+cuando el vínculo laboral todavía no está formalizado.
+
+---
+
+## Addendum — comparativas, rango y rubro
+
+### El cierre contra el promedio de cuatro semanas
+
+Debajo del desglose, un bloque **Contra las semanas anteriores** pone ventas,
+margen bruto y ganancia neta contra la semana anterior y contra el promedio de
+las cuatro anteriores. La cuenta vive en `calc.promedioSemanas()` y la
+variación en `calc.variacionPct()`, las dos puras y con tests.
+
+**Se promedian solo las semanas con ventas.** La cocina para por semanas
+enteras, y una semana parada no es una semana mala: es una semana que no hubo.
+Si entrara, dos semanas paradas de cuatro partirían el promedio a la mitad y
+cualquier semana normal se vería como un +100%. Una semana sin ventas con un
+gasto suelto (la garrafa) tampoco cuenta. La pantalla dice cuántas semanas
+entraron —"de la única semana con entregas de las últimas 4"— para que un
+promedio de una no se lea como si fueran cuatro. Sin ninguna, no hay promedio
+y se dice con palabras.
+
+Los porcentajes del promedio salen de los promedios en pesos, no del promedio
+de porcentajes: una semana chica con mucho margen no pesa igual que una grande.
+
+Contra una base en cero, `variacionPct()` devuelve `null` y se muestra un
+guion. Con base negativa divide por el valor absoluto, para que salir de una
+pérdida se lea como mejora.
+
+La comparativa es **solo devengado**: la caja de la semana no se compara ni se
+promedia (regla 5). Las anulaciones ya llegan resueltas, porque el promedio se
+arma con el mismo `cierreSemanal()` que resta el contramovimiento.
+
+El cierre lee las cuatro tablas una sola vez y calcula las cinco semanas sobre
+eso, en lugar de ir cinco veces a la base.
+
+### Rentabilidad por rango
+
+Un chip más, **Rango**, con dos fechas *desde · hasta* en una línea (entra a
+390px). Arranca en los últimos 30 días. Un rango al revés no se calcula: se
+avisa con `calc.errorRango()` en vez de dejar la lista vacía, que se leería
+como "no se vendió nada". Recalcula en `change`, no en `input`.
+
+### Filtro por rubro
+
+El doc decía "cuando haya volumen suficiente", y hoy la cocina no produce.
+Se hizo igual porque salió chico: dentro de **Salió** aparece una segunda fila
+de chips con los rubros que efectivamente tienen gastos, y nada más. No toca
+datos ni cálculos, solo qué filas se ven.

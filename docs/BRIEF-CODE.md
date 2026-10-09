@@ -76,8 +76,9 @@ Son referencia visual, no código a copiar. Ver las reglas de portado en `CLAUDE
 
 ### Deuda conocida
 
-- [ ] **No se puede anular una venta** — hoy hay que borrarla desde la consola.
-      Es lo primero que van a pedir apenas alguien tape de más.
+- [x] ~~**No se puede anular una venta** — hoy hay que borrarla desde la consola.
+      Es lo primero que van a pedir apenas alguien tape de más.~~ — resuelto en la
+      Fase 2: `anularPedido()` en `js/modules/pedidos.js`.
 
 - [x] ~~**Falta implementar la conversión de unidades** (g↔kg, ml↔l) en
       `calc.costoProducto()`~~ — resuelto en la Fase 1, ver `docs/FASE-1.md`.

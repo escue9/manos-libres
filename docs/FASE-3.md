@@ -104,9 +104,9 @@ editar, y que los 7 botones de día apunten todos a ella.
 
 ## Pendiente
 
-- [ ] Comprobante de liquidación por trabajadora para imprimir o mandar
-- [ ] Ver el histórico de liquidaciones pagadas
-- [ ] Que la trabajadora vea cuánto cobró en semanas anteriores
+- [x] Comprobante de liquidación por trabajadora para imprimir o mandar
+- [x] Ver el histórico de liquidaciones pagadas
+- [x] Que la trabajadora vea cuánto cobró en semanas anteriores
 
 ---
 
@@ -220,3 +220,67 @@ para la tabla nueva. Las que más valen:
 - subir el pago de un producto no cambia lo ya producido
 - la venta congela materiales + pago
 - María no ve lo que produjo ni cobró Ana (el render, con jsdom)
+
+---
+
+## Addendum — histórico de liquidaciones y comprobantes
+
+Cierra los tres pendientes. Son la misma cosa vista desde dos lados: qué se
+pagó, a quién y cuándo. Está hecho sobre el modelo de pago por producción.
+
+**Qué hay.** El admin tiene, debajo de "Liquidar semana", el botón
+*Liquidaciones pagadas · comprobantes*: el histórico agrupado por día de pago,
+con el nombre y el total de cada una. Al confirmar una liquidación se abren
+solos los comprobantes de hoy, que es cuando se entregan. La trabajadora ve en
+**Lo mío** el bloque *Lo que cobraste* con sus últimas cuatro liquidaciones (el
+resto en "Ver todo"), entre su total de la semana y la tabla de cuánto se paga
+cada producto. Cada fila tiene dos botones: **Comprobante**, que abre la
+ventana de impresión del navegador (de ahí sale "Guardar como PDF"), y
+**WhatsApp**, un link `wa.me` con el comprobante en texto.
+
+**Decisiones:**
+
+- **Sin tablas ni columnas nuevas.** Una liquidación es (trabajadora,
+  `fecha_pago`): `liquidarSemana()` ya le pone la misma fecha a todo el lote.
+  Si a una persona se le pagan dos lotes el mismo día, salen en un solo
+  comprobante — es la plata que recibió ese día. Hay test.
+- **Dos fuentes, cada fila contada una vez.** Lo de ahora sale de
+  `pago_produccion` pagado; lo de antes del cambio, de las `jornada` pagadas
+  **con** tarifa, que son histórico real y siguen apareciendo. Las jornadas de
+  ahora (tarifa cero) son asistencia y no se listan. Las dos tablas no se
+  pisan, así que nada suma dos veces. Hay test con una liquidación vieja y una
+  jornada de asistencia pagada en el mismo lote.
+- **No sale de la caja.** El egreso de `movimiento_caja` es uno por todo el
+  equipo y no dice cuánto fue de cada una, y la trabajadora no ve la caja. Un
+  test verifica que lo pagado hoy en el histórico cuadra con los egresos.
+- **Montos congelados (regla 4).** El comprobante desglosa
+  `unidades × pago_unitario` por producto con el monto de cada fila; si el pago
+  de un producto cambió entre dos órdenes del mismo lote, salen dos líneas.
+  Subir el pago de la tarta no mueve lo ya cobrado. Hay test.
+- **Privacidad (regla 8).** `liquidacionesPagadas()` pasa las dos tablas por
+  `auth.filtrarPropio()` antes que nada, y `comprobanteLiquidacion()` vuelve a
+  validar el id: desde la consola, una trabajadora no saca el de otra, ni el
+  nuevo ni el viejo por día.
+- **Qué dice el papel.** "Comprobante de pago por producción" con las unidades
+  producidas, o "Comprobante de pago de jornadas" si es una liquidación de
+  antes del cambio — llamarla de producción sería reescribirla. Línea de
+  "Recibí conforme". No dice recibo de sueldo, trabajo registrado ni nada que
+  sugiera relación de dependencia. El pie es de la Federación de
+  Organizaciones Sociales «Mesa Solidaria Tandil».
+- **WhatsApp.** El admin lo manda al teléfono de la ficha si es un celular
+  argentino reconocible (10 dígitos → `549…`); si no, el link abre para elegir
+  contacto en vez de adivinar. La trabajadora no lleva número: lo reenvía a
+  quien quiera.
+- **La ventana de impresión es una copia de la de `caja.js`**, no un import: la
+  de caja no se exporta. Si aparece un tercer papel, conviene mudar las dos a
+  `ui.js`. Se abre sincrónica con el toque, antes de leer la base: Safari en el
+  celular bloquea un `window.open` que llega después de un `await`.
+
+**Tests nuevos:** en `fase-3.test.mjs`, el histórico (regla 4, la liquidación
+vieja por día, nada sumado dos veces), el texto y el HTML del comprobante, el
+link de WhatsApp, lo que ve la trabajadora y dos pagos el mismo día. En
+`privacidad.test.mjs`, el render real de *Lo que cobraste* con jsdom: que no
+aparezca lo cobrado por otra, que los dos comprobantes —el de producción y el
+viejo— apunten a ella, que el texto de WhatsApp no traiga datos ajenos ni
+número, que el comprobante impreso lleve su nombre, diga "por producción" y el
+pie de la Federación, y que desde la consola no saque el de otra.

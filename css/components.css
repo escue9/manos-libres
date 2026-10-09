@@ -396,6 +396,10 @@ body.con-login { overflow: hidden; }
 .fila__meta   { display: flex; flex-wrap: wrap; gap: 5px; color: var(--text-dim); font-size: .8rem; }
 .fila__lado   { flex: none; }
 
+/* Movimiento anulado: queda a la vista, pero no se lee como plata vigente */
+.fila--anulada .fila__titulo,
+.fila--anulada .num { text-decoration: line-through; color: var(--text-dim) !important; }
+
 /* Fila de una tabla con faltante de insumo */
 .fila--falta td { color: var(--danger); }
 
@@ -476,6 +480,12 @@ body.con-login { overflow: hidden; }
   background: var(--surface-2); border-radius: var(--r-sm);
   font-size: .88rem;
 }
+
+/* Una fila con sus dos acciones debajo, a lo ancho: a 390px dos botones al
+   costado de un monto no entran con el tamaño de dedo que piden */
+.acciones { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin-top: var(--sp-2); }
+.acciones .btn { padding: 0 var(--sp-2); text-decoration: none; }
+.liquidacion + .liquidacion { margin-top: var(--sp-3); }
 
 /* ---------- Bloques dentro de un modal ---------- */
 
@@ -613,6 +623,32 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
   transition: border-color .14s, color .14s, background .14s;
 }
 .chip.sel { border-color: var(--clientes); color: var(--text); background: var(--surface-2); }
+
+/* Segunda fila de chips que afina la de arriba (el rubro dentro de "Salió"):
+   más chica para que se lea como subordinada y no como otro filtro al mismo nivel */
+.chips--sub { margin: 0 0 var(--sp-3); }
+.chips--sub .chip { min-height: 38px; padding: 0 12px; font-size: .8rem; }
+
+/* Desde · hasta en una línea. Dos columnas iguales con min-width 0: el input
+   date trae un ancho mínimo propio que a 390px empuja la pantalla de costado */
+.rango-fechas {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.rango-fechas .input { width: 100%; }
+
+/* Comparativa del cierre: la semana contra la anterior y contra el promedio */
+.comparativa h3 { font-size: .95rem; }
+.comparativa__grilla {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: var(--sp-4); row-gap: var(--sp-2);
+  align-items: baseline; margin-top: var(--sp-3);
+}
+.comparativa__grilla > :nth-child(3n+2),
+.comparativa__grilla > :nth-child(3n) { text-align: right; }
+.comparativa__col { color: var(--text-faint); font-size: .72rem; line-height: 1.2; }
+.comparativa__etiqueta { color: var(--text-dim); }
+.comparativa__nota { margin-top: var(--sp-3); font-size: .8rem; }
 
 .medios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: var(--sp-4) 0; }
 .medio {

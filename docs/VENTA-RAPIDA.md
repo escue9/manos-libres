@@ -83,9 +83,9 @@ deje rastro, y que el cierre semanal después vea esa venta con el costo correct
 
 ## Pendiente de Fase 2
 
-- [ ] Pedidos con fecha de entrega futura y cliente obligatorio
-- [ ] Agenda semanal de entregas
-- [ ] Clientes con segmento e historial
-- [ ] Anular una venta del día (hoy hay que borrarla desde la consola)
+- [ ] Pedidos con fecha de entrega futura y cliente obligatorio — la fecha futura está (`crearPedido()`); el cliente quedó opcional
+- [x] Agenda semanal de entregas — `pantallaAgenda()` en `js/modules/pedidos.js`
+- [x] Clientes con segmento e historial — `renderClientes()` y `calc.segmentoCliente()`
+- [x] Anular una venta del día (hoy hay que borrarla desde la consola) — `anularPedido()` en `js/modules/pedidos.js`
 
 Lo de anular es lo primero que van a pedir apenas alguien se equivoque.

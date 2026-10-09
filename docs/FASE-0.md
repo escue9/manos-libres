@@ -68,8 +68,8 @@ Nueva, no estaba en el PDR: almacén clave/valor para el hash del admin y el sal
 **Manual, con el celular en la mano** — te toca a vos:
 
 - [ ] Abre en `http://localhost:8000` y se ve bien a 390px
-- [ ] Pide PIN y no deja pasar sin él
-- [ ] El botón de backup baja un `.json` con datos adentro
+- [x] Pide PIN y no deja pasar sin él — `auth.ingresar()`, cubierto en `test/fase-0.test.mjs`
+- [x] El botón de backup baja un `.json` con datos adentro — `descargarBackup()` en `js/app.js`
 - [ ] Cerrar y reabrir conserva los datos
 
 ### ⚠️ Pendiente — requiere HTTPS
