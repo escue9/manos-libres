@@ -351,7 +351,19 @@ async function restaurarBackup(archivo) {
 /* ------------------------------------------------------------------ */
 
 async function arrancarSesion() {
+  delete window.ml;
   if (!auth.restaurarSesion()) await mostrarLogin();
+
+  // Las funciones de carga, a mano en la consola, solo con sesión de admin.
+  // No es la barrera: cada función hace su auth.exigir() y cualquiera puede
+  // hacer import() del módulo. Es para no dejar herramientas de admin
+  // colgando de window en el celular de una trabajadora
+  if (auth.rol === 'admin') {
+    const { crearInsumo, registrarCompra, ajustarStock, reiniciarStock, guardarReceta,
+      requerimientos, crearOrden, cerrarOrden, validarSemana, cargarSemana, recalcularCostos } = produccion;
+    window.ml = { produccion: { crearInsumo, registrarCompra, ajustarStock, reiniciarStock, guardarReceta,
+      requerimientos, crearOrden, cerrarOrden, validarSemana, cargarSemana, recalcularCostos } };
+  }
 
   // Recién ahora se sabe quién entró: el estado se recarga con lo que ese rol
   // puede tener en memoria (state.js → recortarTrabajadora)

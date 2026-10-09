@@ -346,7 +346,7 @@ Trazabilidad completa. Nunca se edita un stock a mano sin dejar rastro.
 
 ### 4.1 Producción y Stock · *rosa `#e8185a`*
 
-**Pantallas:** Insumos · Recetas · Órdenes de producción · Stock terminado
+**Pantallas:** Stock (insumos y producto terminado) · Compras · Recetas · Producción (órdenes)
 
 #### Flujo: registrar una compra
 1. Admin abre Insumos → "Registrar compra"

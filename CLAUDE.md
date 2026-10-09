@@ -174,6 +174,7 @@ Al portar un mockup:
 
 - [x] **Fase 0 — Fundación** · estructura PWA, `db.js`, auth por PIN, navegación, identidad visual
 - [x] **Fase 1 — Producción** · insumos, compras, recetas, costeo, órdenes, stock
+  - [x] vuelta del receso · reinicio de stock, carga semanal sin pantalla (`cargarSemana`), segmentos Stock · Compras · Recetas · Producción
 - [x] **Fase 2 — Ventas** · clientes, pedidos, agenda de entregas, venta rápida, cobros
 - [x] **Fase 3 — Equipo** · trabajadoras, jornadas, liquidación, vista por rol
 - [x] **Fase 4 — Caja** · movimientos, cierre semanal, rentabilidad, exportables
@@ -201,7 +202,7 @@ Cada fase deja el sistema usable. No arranques una fase sin cerrar la anterior.
 - Probar siempre en vista mobile del navegador, no en desktop
 - Antes de dar una fase por terminada, revisá el checklist de §8 del PDR
 - Los datos de prueba se cargan desde `js/db.js` → `seed()`
-- Correr `npm test` antes de cerrar cualquier fase — son las diez suites juntas.
+- Correr `npm test` antes de cerrar cualquier fase — son todas las suites juntas.
   Si tocaste `db.js`, `auth.js` o `calc.js`, agregá el caso que cubra el cambio.
 - Para empezar de cero: en la consola `await db.reset()` y recargar. Ojo que eso
   también borra el PIN de administración.

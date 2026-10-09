@@ -94,7 +94,7 @@ const SEGMENTO = {
   fiel:      { etiqueta: 'Fiel',      badge: 'badge--ok' },
 };
 
-const MEDIOS = [
+export const MEDIOS = [
   { id: 'efectivo', etiqueta: 'Efectivo',
     svg: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/>' },
   { id: 'transferencia', etiqueta: 'Transfer.',

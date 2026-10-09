@@ -89,6 +89,15 @@ export function consumoItem(item, insumo, lotes = 1) {
  */
 export function costoProducto(recetaItems, insumosPorId, rindePorLote) {
   if (!recetaItems?.length || !rindePorLote) return null;
+  return costoLote(recetaItems, insumosPorId) / rindePorLote;
+}
+
+/**
+ * Costo de una vuelta de receta, con merma. PDR §5.2
+ * Tira error si algún insumo no tiene costo (ver abajo).
+ */
+export function costoLote(recetaItems, insumosPorId) {
+  if (!recetaItems?.length) return 0;
 
   // Un insumo sin costo NO vale cero: vale "todavía no sabemos".
   // Sumarlo como 0 daba una empanada a $50 con 93% de margen y ni una alerta,
@@ -106,12 +115,10 @@ export function costoProducto(recetaItems, insumosPorId, rindePorLote) {
     throw new Error(`Sin costo cargado: ${nombres}. Registrá la compra primero`);
   }
 
-  const costoLote = recetaItems.reduce(
+  return recetaItems.reduce(
     (acc, it) => acc + consumoItem(it, insumosPorId.get(it.insumo_id)) * insumosPorId.get(it.insumo_id).costo_unitario,
     0,
   );
-
-  return costoLote / rindePorLote;
 }
 
 /**
@@ -162,6 +169,10 @@ export function margen(precioVenta, costoUnitario) {
     pesos,
     pct: precioVenta > 0 ? (pesos / precioVenta) * 100 : 0,
   };
+}
+
+export function margenPct(precioVenta, costoUnitario) {
+  return margen(precioVenta, costoUnitario).pct;
 }
 
 /** Umbral de alerta del PDR §5.4: margen bruto bajo 25%. */

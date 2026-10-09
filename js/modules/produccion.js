@@ -1,12 +1,13 @@
 /**
- * produccion.js — Insumos · Recetas · Órdenes de producción · Stock terminado
+ * produccion.js — Stock · Compras · Recetas · Producción
  * Color del módulo: rosa var(--produccion)
  *
- * FASE 1 — ver docs/PDR.md §4.1
+ * FASE 1 — ver docs/PDR.md §4.1 y docs/FASE-1.md
  *
  * Las cuatro pantallas viven acá con subnavegación. La lógica de plata está en
- * las funciones exportadas de arriba (registrarCompra, cerrarOrden, ajustes):
- * son las que prueban los tests y las que no pueden estar mal.
+ * las funciones exportadas de arriba (registrarCompra, cerrarOrden, ajustes,
+ * reiniciarStock, cargarSemana): son las que prueban los tests, las que no
+ * pueden estar mal y las que se llaman sin pantalla desde window.ml.produccion.
  *
  * Reglas que no se negocian:
  *  - No cerrar orden con insumo insuficiente sin ajuste explícito y con motivo
@@ -20,7 +21,7 @@ import { state } from '../state.js';
 import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
-import { demandaPendiente } from './pedidos.js';
+import { demandaPendiente, MEDIOS } from './pedidos.js';
 
 const CATEGORIAS_INSUMO = ['Almacén', 'Carnicería', 'Verdulería', 'Lácteos', 'Packaging', 'Otros'];
 
@@ -97,7 +98,11 @@ export async function registrarCompra({ insumoId, cantidad, costoTotal, proveedo
     referencia_id: compra.id,
   });
 
-  const alertas = await recalcularCostos([insumoId]);
+  // El texto del PDR §4.1: "Subió el costo de la carne. La empanada de carne
+  // bajó a 18% de margen." La primera mitad solo si de verdad subió
+  const subio = costoNuevo > costoPrevio + 1e-9 ? `Subió el costo de ${insumo.nombre.toLocaleLowerCase('es')}. ` : '';
+  const alertas = (await recalcularCostos([insumoId]))
+    .map((a) => (a.texto ? { ...a, texto: subio + a.texto } : a));
 
   return { compra, costoPrevio, costoNuevo, costoCompraUnit, alertas };
 }
@@ -147,7 +152,7 @@ export async function recalcularCostos(insumoIds = null) {
 
     const m = calc.margen(p.precio_venta || 0, costo);
     if (p.precio_venta > 0 && m.pct < calc.MARGEN_MINIMO) {
-      alertas.push({ producto: p.nombre, margenPct: m.pct });
+      alertas.push({ producto: p.nombre, margenPct: m.pct, texto: `${p.nombre} bajó a ${m.pct.toFixed(1)}% de margen.` });
     }
   }
 
@@ -208,7 +213,11 @@ export async function crearOrden({ fecha = hoyISO(), items = [], notas = '' }) {
     costo_unitario_snapshot: null,
   })));
 
-  return orden;
+  // La tabla que se mira antes de empezar a cocinar (PDR §4.1, paso 2). Va
+  // pegada a la orden para que quien la crea desde la consola la vea sin
+  // otra llamada; la pantalla usa solo el id
+  const reqs = await requerimientos(lineas.map((i) => ({ producto_id: i.producto_id, cantidad: Number(i.cantidad) })));
+  return { ...orden, requerimientos: reqs, faltantes: reqs.filter((r) => r.falta > 0) };
 }
 
 /**
@@ -349,6 +358,26 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
 
   const consumo = calc.consumoTotal(planificado, recetasPorProducto, insumosPorId);
 
+  /* --- el costo a congelar, antes de escribir nada --- */
+
+  // Un snapshot en $0 es un margen falso del 100% que queda grabado para
+  // siempre (regla 4): el mismo criterio que el insumo sin costo en calc.js.
+  // Va antes de tocar el stock para que el error no deje la orden por la mitad.
+  const sinCosto = [];
+  for (const l of lineas) {
+    try {
+      l.snapshot = calc.costoProducto(
+        recetasPorProducto.get(l.producto.id) || [], insumosPorId, l.producto.rinde_por_lote,
+      );
+    } catch { l.snapshot = null; }
+    if (l.snapshot == null) l.snapshot = calc.costoEfectivo(l.producto);
+    if (!(l.snapshot > 0)) sinCosto.push(l.producto.nombre);
+  }
+  if (sinCosto.length) {
+    await soltar();
+    throw new Error(`Sin costo para congelar: ${sinCosto.join(', ')}. Cargá la receta o el costo manual`);
+  }
+
   /* --- a) insumos: primero verificar, después descontar --- */
 
   const faltantes = [...consumo.entries()]
@@ -393,16 +422,8 @@ export async function cerrarOrden(ordenId, cantidadesReales = {}, { motivoAjuste
   /* --- b y c) producto terminado, con el costo congelado --- */
 
   for (const l of lineas) {
-    let snapshot;
-    try {
-      snapshot = calc.costoProducto(
-        recetasPorProducto.get(l.producto.id) || [], insumosPorId, l.producto.rinde_por_lote,
-      );
-    } catch { snapshot = null; }
-    if (snapshot == null) snapshot = calc.costoEfectivo(l.producto);
-
     await db.from('produccion_item')
-      .update({ cantidad_real: l.cantidad, costo_unitario_snapshot: snapshot })
+      .update({ cantidad_real: l.cantidad, costo_unitario_snapshot: l.snapshot })
       .eq('id', l.item.id);
 
     if (!l.cantidad) continue;
@@ -511,7 +532,7 @@ function bloqueEquipo(orden, asignadas) {
  * completa está detrás de gestionarInsumos.
  */
 
-export async function ajustarStockInsumo(insumoId, nuevoStock, motivo) {
+export async function ajustarStockInsumo(insumoId, nuevoStock, motivo, referenciaId = null) {
   auth.exigir('cargarProduccion');
   if (!motivo?.trim()) throw new Error('El ajuste necesita un motivo');
   if (!(Number(nuevoStock) >= 0)) throw new Error('El stock no puede quedar negativo');
@@ -522,11 +543,12 @@ export async function ajustarStockInsumo(insumoId, nuevoStock, motivo) {
   await db.from('insumo').update({ stock_actual: Number(nuevoStock) }).eq('id', insumoId);
   await db.from('movimiento_stock_insumo').insert({
     insumo_id: insumoId, fecha: ahoraISO(), tipo: 'ajuste', cantidad: delta, motivo: motivo.trim(),
+    referencia_id: referenciaId,
   });
   return delta;
 }
 
-export async function ajustarStockProducto(productoId, nuevoStock, motivo) {
+export async function ajustarStockProducto(productoId, nuevoStock, motivo, referenciaId = null) {
   auth.exigir('cargarProduccion');
   if (!motivo?.trim()) throw new Error('El ajuste necesita un motivo');
   if (!(Number(nuevoStock) >= 0)) throw new Error('El stock no puede quedar negativo');
@@ -537,6 +559,7 @@ export async function ajustarStockProducto(productoId, nuevoStock, motivo) {
   await db.from('producto').update({ stock_actual: Number(nuevoStock) }).eq('id', productoId);
   await db.from('movimiento_stock_producto').insert({
     producto_id: productoId, fecha: ahoraISO(), tipo: 'ajuste', cantidad: delta, motivo: motivo.trim(),
+    referencia_id: referenciaId,
   });
   return delta;
 }
@@ -583,7 +606,9 @@ export async function guardarReceta(productoId, items, rindePorLote) {
   const rinde = Number(rindePorLote);
   if (!(rinde > 0)) throw new Error('El rinde por lote tiene que ser mayor a cero');
 
-  const insumos = new Map(state.insumos.map((i) => [i.id, i]));
+  // De la base y no de state: el importador crea insumos y arma la receta en la
+  // misma pasada, y state.insumos todavía no los tiene
+  const insumos = new Map((await db.from('insumo').select()).map((i) => [i.id, i]));
   for (const it of items) {
     const insumo = insumos.get(it.insumo_id);
     if (!insumo) throw new Error('Hay una línea sin insumo');
@@ -613,30 +638,382 @@ export async function guardarReceta(productoId, items, rindePorLote) {
   return recalcularCostos();
 }
 
+/**
+ * Alta de insumo. Nace con stock y costo en cero: los dos salen de la primera
+ * compra, así el costo es el precio real que se pagó y no uno estimado.
+ */
+export async function crearInsumo({ nombre, categoria = 'Otros', unidad_medida, stock_minimo = 0, proveedor_habitual = null }) {
+  auth.exigir('gestionarInsumos');
+
+  nombre = nombre?.trim();
+  if (!nombre) throw new Error('Falta el nombre del insumo');
+  if (!calc.UNIDADES.includes(unidad_medida)) {
+    throw new Error(`Unidad desconocida: ${unidad_medida}. Tiene que ser ${calc.UNIDADES.join(', ')}`);
+  }
+
+  const existentes = await db.from('insumo').select();
+  if (existentes.some((i) => clave(i.nombre) === clave(nombre))) {
+    throw new Error(`Ya hay un insumo que se llama ${nombre}`);
+  }
+
+  const un = state.unidadNegocio?.id ?? (await db.from('unidad_negocio').select().single())?.id;
+  return db.from('insumo').insert({
+    unidad_negocio_id: un,
+    nombre, categoria, unidad_medida,
+    stock_minimo: Number(stock_minimo) || 0,
+    proveedor_habitual,
+    costo_unitario: 0, stock_actual: 0, activo: true,
+  });
+}
+
+/** Un ajuste con la forma del importador. Las dos funciones de abajo hacen el trabajo. */
+export async function ajustarStock({ tabla, id, cantidad_nueva, motivo }) {
+  if (tabla === 'insumo') return ajustarStockInsumo(id, cantidad_nueva, motivo);
+  if (tabla === 'producto') return ajustarStockProducto(id, cantidad_nueva, motivo);
+  throw new Error(`No se ajusta stock de "${tabla}": tiene que ser insumo o producto`);
+}
+
+/**
+ * Pone en cero todo el stock, insumos y producto terminado, con un ajuste por
+ * cada fila que no estaba en cero. Es para volver de un receso: lo que dice el
+ * sistema ya no es lo que hay en la heladera.
+ *
+ * No toca costo_unitario: el último costo conocido sigue siendo la mejor
+ * referencia, y con stock en cero la próxima compra lo reemplaza entero
+ * (costoPonderado). Tampoco toca caja: un ajuste mueve cantidades, no plata.
+ */
+export async function reiniciarStock(motivo) {
+  auth.exigir('gestionarInsumos');
+  if (!motivo?.trim()) throw new Error('El reinicio necesita un motivo');
+
+  const [insumos, productos] = await Promise.all([db.from('insumo').select(), db.from('producto').select()]);
+  let nInsumos = 0, nProductos = 0;
+
+  // Todos los ajustes del reinicio comparten referencia: así se los encuentra
+  // juntos después, y se distinguen de un ajuste suelto con el mismo motivo
+  const referencia = crypto.randomUUID();
+
+  for (const i of insumos) {
+    if (!(i.stock_actual || 0)) continue;
+    await ajustarStockInsumo(i.id, 0, motivo, referencia);
+    nInsumos++;
+  }
+  for (const p of productos) {
+    if (!(p.stock_actual || 0)) continue;
+    await ajustarStockProducto(p.id, 0, motivo, referencia);
+    nProductos++;
+  }
+
+  return { insumos: nInsumos, productos: nProductos, referencia };
+}
+
+/* ================================================================== */
+/*  Importador semanal                                                 */
+/* ================================================================== */
+
+/** Para comparar nombres sin que una mayúscula o un espacio los separen. */
+const clave = (s) => String(s ?? '').trim().toLocaleLowerCase('es');
+
+const FECHA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Busca una fila por id o por nombre. El JSON puede nombrar los insumos por su
+ * nombre porque los insumos nuevos todavía no tienen id cuando se escribe.
+ */
+function resolver(filas, ref, que) {
+  const id = ref[`${que}_id`];
+  const nombre = ref[que];
+  if (id) {
+    const f = filas.find((x) => x.id === id);
+    if (!f) throw new Error(`No existe el ${que} con id ${id}`);
+    return f;
+  }
+  if (!nombre) throw new Error(`Falta el ${que} (por nombre o por ${que}_id)`);
+  const hits = filas.filter((x) => clave(x.nombre) === clave(nombre));
+  if (!hits.length) throw new Error(`No existe el ${que} "${nombre}"`);
+  if (hits.length > 1) throw new Error(`Hay ${hits.length} ${que}s que se llaman "${nombre}": usá ${que}_id`);
+  return hits[0];
+}
+
+/**
+ * Valida una semana entera sin escribir nada.
+ *
+ * Simula en memoria lo que van a hacer las funciones de verdad, en el mismo
+ * orden: el reinicio pone el stock en cero, las compras lo suben y mueven el
+ * costo, las recetas reemplazan a las que había y las producciones consumen.
+ * Así se detecta un faltante en la tercera producción antes de escribir la
+ * primera compra.
+ *
+ * IndexedDB no da una transacción que abarque todas las tablas: si cargarSemana
+ * fallara a mitad de camino quedarían compras con su egreso en caja y sin la
+ * producción que les sigue. Por eso todo lo que puede fallar se mira acá.
+ *
+ * @returns {Object} el plan ya resuelto: ids en lugar de nombres, cantidades
+ *                   en la unidad del insumo
+ * @throws  Error con `.errores` — la lista completa, no solo el primero
+ */
+export async function validarSemana(semana) {
+  const errores = [];
+  const anotar = (donde, e) => errores.push(`${donde}: ${e.message || e}`);
+
+  if (!semana || typeof semana !== 'object') throw new Error('La semana tiene que ser un objeto');
+
+  const [insumosDb, productos, recetasDb] = await Promise.all([
+    db.from('insumo').select(),
+    db.from('producto').select(),
+    db.from('receta_item').select(),
+  ]);
+
+  // Copias: la simulación no puede tocar las filas que devolvió la base.
+  // En las recetas simuladas `insumo_id` apunta al objeto insumo y no a su id,
+  // porque los insumos nuevos todavía no tienen id
+  const insumos = insumosDb.map((i) => ({ ...i }));
+  const productosSim = productos.map((p) => ({ ...p }));
+  const recetas = new Map();
+  for (const [prodId, items] of agrupar(recetasDb, 'producto_id')) {
+    recetas.set(prodId, items
+      .map((it) => ({ ...it, insumo_id: insumos.find((i) => i.id === it.insumo_id) }))
+      .filter((it) => it.insumo_id));
+  }
+
+  const plan = { reinicio: null, insumos_nuevos: [], compras: [], recetas: [], producciones: [] };
+
+  /* --- reinicio --- */
+  if (semana.reinicio) {
+    if (!semana.reinicio.motivo?.trim()) errores.push('reinicio: falta el motivo');
+    else plan.reinicio = { motivo: semana.reinicio.motivo.trim() };
+    insumos.forEach((i) => { i.stock_actual = 0; });
+    productosSim.forEach((p) => { p.stock_actual = 0; });
+  }
+
+  /* --- insumos nuevos --- */
+  (semana.insumos_nuevos || []).forEach((n, k) => {
+    const donde = `insumos_nuevos[${k}]`;
+    const nombre = n?.nombre?.trim();
+    if (!nombre) return errores.push(`${donde}: falta el nombre`);
+    if (!calc.UNIDADES.includes(n.unidad_medida)) {
+      return errores.push(`${donde} (${nombre}): unidad desconocida "${n.unidad_medida}"`);
+    }
+    if (insumos.some((i) => clave(i.nombre) === clave(nombre))) {
+      return errores.push(`${donde}: ya existe un insumo "${nombre}"`);
+    }
+    const sim = { id: null, nombre, unidad_medida: n.unidad_medida, stock_actual: 0, costo_unitario: 0 };
+    insumos.push(sim);
+    plan.insumos_nuevos.push({ datos: { ...n, nombre }, sim });
+  });
+
+  /* --- compras --- */
+  (semana.compras || []).forEach((c, k) => {
+    const donde = `compras[${k}]`;
+    try {
+      const insumo = resolver(insumos, c, 'insumo');
+      const costoTotal = Number(c.costo_total);
+      let cantidad = Number(c.cantidad);
+      if (!(cantidad > 0)) throw new Error('la cantidad tiene que ser mayor a cero');
+      if (!(costoTotal >= 0)) throw new Error('falta el costo total o es negativo');
+      if (c.fecha != null && !FECHA_ISO.test(c.fecha)) throw new Error(`fecha "${c.fecha}" no es AAAA-MM-DD`);
+      // "500 g" de un insumo que se mide en kg: se pasa a la unidad del insumo
+      if (c.unidad_medida) cantidad = calc.convertir(cantidad, c.unidad_medida, insumo.unidad_medida);
+
+      insumo.costo_unitario = calc.costoPonderado(insumo.stock_actual || 0, insumo.costo_unitario || 0, cantidad, costoTotal / cantidad);
+      insumo.stock_actual = (insumo.stock_actual || 0) + cantidad;
+      plan.compras.push({ insumo, cantidad, costo_total: costoTotal, proveedor: c.proveedor || '', fecha: c.fecha, medio: c.medio });
+    } catch (e) { anotar(donde, e); }
+  });
+
+  /* --- recetas --- */
+  (semana.recetas || []).forEach((r, k) => {
+    const donde = `recetas[${k}]`;
+    try {
+      const producto = resolver(productosSim, r, 'producto');
+      const rinde = Number(r.rinde_por_lote ?? producto.rinde_por_lote);
+      if (!(rinde > 0)) throw new Error(`${producto.nombre}: el rinde por lote tiene que ser mayor a cero`);
+      if (!r.items?.length) throw new Error(`${producto.nombre}: la receta no tiene insumos`);
+
+      const items = r.items.map((it, j) => {
+        const insumo = resolver(insumos, it, 'insumo');
+        const unidad = it.unidad_medida || insumo.unidad_medida;
+        if (!(Number(it.cantidad) > 0)) throw new Error(`item ${j}: falta la cantidad de ${insumo.nombre}`);
+        if (!calc.sonCompatibles(unidad, insumo.unidad_medida)) {
+          throw new Error(`item ${j}: ${insumo.nombre} se mide en ${insumo.unidad_medida}, no en ${unidad}`);
+        }
+        const merma = Number(it.merma_pct) || 0;
+        if (merma < 0 || merma >= 100) throw new Error(`item ${j}: la merma de ${insumo.nombre} tiene que estar entre 0 y 99%`);
+        return { insumo, cantidad: Number(it.cantidad), unidad_medida: unidad, merma_pct: merma };
+      });
+
+      producto.rinde_por_lote = rinde;
+      recetas.set(producto.id, items.map((it) => ({ ...it, insumo_id: it.insumo })));
+      plan.recetas.push({ producto, rinde, items });
+    } catch (e) { anotar(donde, e); }
+  });
+
+  /* --- producciones --- */
+  const porObjeto = new Map(insumos.map((i) => [i, i]));
+
+  (semana.producciones || []).forEach((p, k) => {
+    const donde = `producciones[${k}]`;
+    try {
+      if (p.fecha != null && !FECHA_ISO.test(p.fecha)) throw new Error(`fecha "${p.fecha}" no es AAAA-MM-DD`);
+      if (!p.items?.length) throw new Error('la producción no tiene productos');
+
+      const lineas = p.items.map((it, j) => {
+        const producto = resolver(productosSim, it, 'producto');
+        const cantidad = Number(it.cantidad);
+        if (!(cantidad > 0)) throw new Error(`item ${j}: la cantidad de ${producto.nombre} tiene que ser mayor a cero`);
+        return { producto, cantidad };
+      });
+
+      const consumo = calc.consumoTotal(lineas, recetas, porObjeto);
+
+      for (const l of lineas) {
+        const receta = recetas.get(l.producto.id) || [];
+        if (receta.length) {
+          // Tira si un insumo de la receta sigue sin costo después de las compras
+          calc.costoProducto(receta, porObjeto, l.producto.rinde_por_lote);
+        } else if (!(l.producto.costo_manual > 0)) {
+          throw new Error(`${l.producto.nombre} no tiene receta ni costo manual: no hay costo para congelar`);
+        }
+      }
+
+      const faltantes = [...consumo.entries()].filter(([i, req]) => req > (i.stock_actual || 0) + 1e-9);
+      if (faltantes.length && !p.motivo_ajuste?.trim()) {
+        throw new Error('falta stock de ' + faltantes
+          .map(([i, req]) => `${i.nombre} (hacen falta ${+req.toFixed(3)} ${i.unidad_medida}, hay ${+(i.stock_actual || 0).toFixed(3)})`)
+          .join(', ') + '. Comprá lo que falta o poné motivo_ajuste');
+      }
+
+      for (const [i, req] of consumo) i.stock_actual = Math.max(i.stock_actual || 0, req) - req;
+      lineas.forEach((l) => { l.producto.stock_actual = (l.producto.stock_actual || 0) + l.cantidad; });
+
+      plan.producciones.push({ fecha: p.fecha, notas: p.notas || '', motivo_ajuste: p.motivo_ajuste?.trim() || null, lineas });
+    } catch (e) { anotar(donde, e); }
+  });
+
+  if (errores.length) {
+    const err = new Error(`La semana no se cargó. ${errores.length} problema${errores.length > 1 ? 's' : ''}:\n- ${errores.join('\n- ')}`);
+    err.errores = errores;
+    throw err;
+  }
+  return plan;
+}
+
+/**
+ * Carga una semana de cocina de una sola vez: reinicio de stock, insumos
+ * nuevos, compras, recetas y producciones, en ese orden. Es la puerta para
+ * cargar desde la consola o desde otra sesión, sin pasar por las pantallas.
+ *
+ * Valida todo antes de escribir (validarSemana): si algo está mal no se
+ * escribe nada y el error trae la lista completa.
+ *
+ * Cada paso llama a la misma función que usa la pantalla, así que las reglas
+ * son las mismas: la compra genera su egreso en caja, la orden congela el
+ * costo, el ajuste deja movimiento con motivo.
+ *
+ * Forma del JSON — los insumos y productos se nombran por `nombre` o por `_id`:
+ *
+ *   {
+ *     reinicio:       { motivo },
+ *     insumos_nuevos: [{ nombre, categoria, unidad_medida, stock_minimo }],
+ *     compras:        [{ insumo, cantidad, unidad_medida?, costo_total, proveedor, fecha, medio? }],
+ *     recetas:        [{ producto, rinde_por_lote, items: [{ insumo, cantidad, unidad_medida, merma_pct }] }],
+ *     producciones:   [{ fecha, notas, motivo_ajuste?, items: [{ producto, cantidad }] }]
+ *   }
+ *
+ * Con `{ soloValidar: true }` devuelve el plan sin escribir.
+ */
+export async function cargarSemana(semana, { soloValidar = false } = {}) {
+  auth.exigir('gestionarInsumos');
+  if (!state.unidadNegocio) await state.cargar();
+
+  const plan = await validarSemana(semana);
+  if (soloValidar) return { plan };
+
+  const resumen = { reinicio: null, insumos: [], compras: [], recetas: [], ordenes: [], alertas: [], egresos: [], stock: null };
+
+  if (plan.reinicio) resumen.reinicio = await reiniciarStock(plan.reinicio.motivo);
+
+  // Los insumos nuevos de la simulación no tenían id: se lo pone el alta
+  for (const n of plan.insumos_nuevos) {
+    const creado = await crearInsumo(n.datos);
+    n.sim.id = creado.id;     // las compras y recetas del plan apuntan a este objeto
+    resumen.insumos.push(creado.nombre);
+  }
+
+  for (const c of plan.compras) {
+    const r = await registrarCompra({
+      insumoId: c.insumo.id, cantidad: c.cantidad, costoTotal: c.costo_total,
+      proveedor: c.proveedor, ...(c.fecha && { fecha: c.fecha }), ...(c.medio && { medio: c.medio }),
+    });
+    resumen.compras.push({ insumo: c.insumo.nombre, cantidad: c.cantidad, costoPrevio: r.costoPrevio, costoNuevo: r.costoNuevo });
+    resumen.egresos.push({ insumo: c.insumo.nombre, fecha: r.compra.fecha, monto: c.costo_total, referencia_id: r.compra.id });
+  }
+
+  for (const r of plan.recetas) {
+    await guardarReceta(r.producto.id, r.items.map((it) => ({
+      insumo_id: it.insumo.id, cantidad: it.cantidad, unidad_medida: it.unidad_medida, merma_pct: it.merma_pct,
+    })), r.rinde);
+    resumen.recetas.push(r.producto.nombre);
+  }
+
+  for (const p of plan.producciones) {
+    const orden = await crearOrden({
+      ...(p.fecha && { fecha: p.fecha }), notas: p.notas,
+      items: p.lineas.map((l) => ({ producto_id: l.producto.id, cantidad: l.cantidad })),
+    });
+    const cierre = await cerrarOrden(orden.id, {}, { motivoAjuste: p.motivo_ajuste });
+    resumen.ordenes.push({ id: orden.id, fecha: orden.fecha, costoInsumos: cierre.costoInsumos, ajustados: cierre.ajustados });
+  }
+
+  // Las alertas finales, con todas las compras y recetas ya aplicadas
+  resumen.alertas = await recalcularCostos();
+
+  // Cómo quedó todo, para controlar contra la heladera
+  const [insumosFin, productosFin] = await Promise.all([
+    db.from('insumo').select().order('nombre'), db.from('producto').select().order('nombre'),
+  ]);
+  resumen.stock = {
+    insumos: insumosFin.map((i) => ({ nombre: i.nombre, stock: i.stock_actual, unidad: i.unidad_medida, costo_unitario: i.costo_unitario })),
+    productos: productosFin.map((p) => ({ nombre: p.nombre, stock: p.stock_actual })),
+  };
+  resumen.totalEgresos = resumen.egresos.reduce((a, e) => a + e.monto, 0);
+
+  await state.invalidar();
+  return resumen;
+}
+
 /* ================================================================== */
 /*  Vista                                                              */
 /* ================================================================== */
 
+/**
+ * Los cuatro segmentos. Compras y Recetas son plata: la trabajadora no los ve
+ * (regla 8). Stock y Producción sí, porque cuenta lo que hay y cocina.
+ */
 const SUBVISTAS = [
-  { id: 'insumos', etiqueta: 'Insumos' },
-  { id: 'recetas', etiqueta: 'Recetas' },
-  { id: 'ordenes', etiqueta: 'Órdenes' },
-  { id: 'stock',   etiqueta: 'Stock' },
+  { id: 'stock',      etiqueta: 'Stock' },
+  { id: 'compras',    etiqueta: 'Compras',    permiso: 'gestionarInsumos' },
+  { id: 'recetas',    etiqueta: 'Recetas',    permiso: 'gestionarInsumos' },
+  { id: 'produccion', etiqueta: 'Producción' },
 ];
 
 /** Se recuerda entre renders: volver de un modal no te saca de la pestaña. */
-let subvista = 'insumos';
+let subvista = 'stock';
 
 const verCostos = () => auth.puede('verCostos');
 const gestiona = () => auth.puede('gestionarInsumos');
 
 export async function render(vista) {
+  const visibles = SUBVISTAS.filter((s) => !s.permiso || auth.puede(s.permiso));
+  // Si cambió la sesión, la pestaña recordada puede no corresponderle al rol nuevo
+  if (!visibles.some((s) => s.id === subvista)) subvista = visibles[0].id;
+
   vista.innerHTML = `
     <div class="between" style="margin-bottom:var(--sp-4)">
       <h1 style="margin:0">Producción</h1>
     </div>
     <div class="subnav" id="subnav">
-      ${SUBVISTAS.map((s) => `
+      ${visibles.map((s) => `
         <button data-sub="${s.id}" class="${s.id === subvista ? 'active' : ''}">${s.etiqueta}</button>
       `).join('')}
     </div>
@@ -653,9 +1030,9 @@ export async function render(vista) {
 }
 
 async function pintarSub(cont) {
-  if (subvista === 'insumos') return pantallaInsumos(cont);
+  if (subvista === 'compras') return pantallaCompras(cont);
   if (subvista === 'recetas') return pantallaRecetas(cont);
-  if (subvista === 'ordenes') return pantallaOrdenes(cont);
+  if (subvista === 'produccion') return pantallaOrdenes(cont);
   return pantallaStock(cont);
 }
 
@@ -703,38 +1080,114 @@ function alGuardar(btn, fn, textoOcupado = 'Guardando…') {
 }
 
 /* ------------------------------------------------------------------ */
-/*  1 · Insumos                                                        */
+/*  1 · Stock — insumos y producto terminado                           */
 /* ------------------------------------------------------------------ */
 
-async function pantallaInsumos(cont) {
+async function pantallaStock(cont) {
   const insumos = state.insumos.filter((i) => i.activo !== false);
-
-  if (!insumos.length) {
-    cont.innerHTML = ui.vacio({
-      modulo: 'produccion', icono: '\u{1F9C2}', titulo: 'Sin insumos cargados',
-      texto: 'Cargá la harina, la carne y el resto con su costo real. De ahí sale '
-           + 'el costo de cada producto.',
-      fase: gestiona() ? '' : 'Lo carga la administración',
-    });
-    if (gestiona()) fab(cont, () => modalInsumo(), 'Nuevo insumo');
-    return;
-  }
-
+  const productos = state.productos.filter((p) => p.activo);
   const bajos = insumos.filter((i) => (i.stock_actual || 0) <= (i.stock_minimo || 0)).length;
+  const valor = productos.reduce((a, p) => a + (p.stock_actual || 0) * calc.costoEfectivo(p), 0);
 
   cont.innerHTML = `
-    ${bajos ? `<div class="alerta alerta--warn">${bajos === 1
-        ? 'Hay 1 insumo en el mínimo o por debajo.'
-        : `Hay ${bajos} insumos en el mínimo o por debajo.`}</div>` : ''}
-    ${porCategoria(insumos).map(([cat, filas]) => `
-      <div class="categoria-titulo">${ui.esc(cat || 'Sin categoría')}</div>
-      <div class="lista">${filas.map(filaInsumo).join('')}</div>
-    `).join('')}`;
+    <h2 style="margin:0 0 var(--sp-3)">Producto terminado</h2>
+    ${productos.length ? `
+      ${verCostos() ? `
+        <div class="stat" style="margin-bottom:var(--sp-3)">
+          <div class="label">Valor del stock terminado</div>
+          <div class="value">${ui.money(valor)}</div>
+        </div>` : ''}
+      <table class="table table--stack">
+        <thead>
+          <tr><th>Producto</th><th class="right">Stock</th><th class="right">Mínimo</th><th></th></tr>
+        </thead>
+        <tbody>
+          ${productos.map((p) => `
+            <tr data-stock="${p.id}">
+              <td data-label="Producto">${ui.esc(p.nombre)}</td>
+              <td data-label="Stock" class="num right">${p.stock_actual || 0}</td>
+              <td data-label="Mínimo" class="num right">${p.stock_minimo || 0}</td>
+              <td data-label="Estado" class="right">${ui.badgeStock(p.stock_actual || 0, p.stock_minimo || 0)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <p class="faint" style="margin:var(--sp-2) 0 0">Tocá un producto para ajustar lo que hay de verdad.</p>
+    ` : '<p class="faint">Todavía no hay productos.</p>'}
+
+    <h2 style="margin:var(--sp-6) 0 var(--sp-3)">Insumos</h2>
+    ${insumos.length ? `
+      ${bajos ? `<div class="alerta alerta--warn">${bajos === 1
+          ? 'Hay 1 insumo en el mínimo o por debajo.'
+          : `Hay ${bajos} insumos en el mínimo o por debajo.`}</div>` : ''}
+      ${porCategoria(insumos).map(([cat, filas]) => `
+        <div class="categoria-titulo">${ui.esc(cat || 'Sin categoría')}</div>
+        <div class="lista">${filas.map(filaInsumo).join('')}</div>
+      `).join('')}
+    ` : ui.vacio({
+      modulo: 'produccion', icono: '\u{1F9C2}', titulo: 'Sin insumos cargados',
+      texto: 'Cargá la harina, la carne y el resto con su costo real. De ahí sale el costo de cada producto.',
+      fase: gestiona() ? '' : 'Lo carga la administración',
+    })}
+
+    ${gestiona() ? `
+      <div class="stack" style="margin-top:var(--sp-6)">
+        <button class="btn btn--block" id="st-nuevo">Nuevo insumo</button>
+        <button class="btn btn--danger btn--block" id="st-reiniciar">Reiniciar stock</button>
+      </div>` : ''}`;
 
   cont.querySelectorAll('[data-insumo]').forEach((el) =>
     el.addEventListener('click', () => modalAccionesInsumo(el.dataset.insumo)));
 
-  if (gestiona()) fab(cont, () => modalInsumo(), 'Nuevo insumo');
+  cont.querySelectorAll('[data-stock]').forEach((el) => el.addEventListener('click', () => {
+    const p = state.productoPorId(el.dataset.stock);
+    modalAjuste({
+      titulo: `Ajustar ${p.nombre}`,
+      actual: `${p.stock_actual || 0} ${p.unidad_venta === 'unidad' ? 'unidades' : p.unidad_venta}`,
+      valor: p.stock_actual || 0,
+      onGuardar: (nuevo, motivo) => ajustarStockProducto(p.id, nuevo, motivo),
+    });
+  }));
+
+  cont.querySelector('#st-nuevo')?.addEventListener('click', () => modalInsumo());
+  cont.querySelector('#st-reiniciar')?.addEventListener('click', modalReiniciarStock);
+}
+
+/**
+ * Pone todo en cero con un motivo escrito. Es para volver de un receso: lo que
+ * dice el sistema ya no es lo que hay en la heladera.
+ */
+function modalReiniciarStock() {
+  const nI = state.insumos.filter((i) => i.stock_actual).length;
+  const nP = state.productos.filter((p) => p.stock_actual).length;
+  if (!nI && !nP) return ui.toast('Todo el stock ya está en cero');
+
+  const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+
+  ui.abrirModal(`
+    <h3>Reiniciar stock</h3>
+    <p class="dim" style="margin-top:calc(var(--sp-2) * -1)">
+      Pone en cero ${plural(nI, 'insumo', 'insumos')} y ${plural(nP, 'producto', 'productos')}.
+      Cada uno queda con su ajuste y este motivo. No toca la caja ni los costos.</p>
+    <div class="stack" style="margin-top:var(--sp-4)">
+      <div class="field">
+        <label for="rs-motivo">Motivo</label>
+        <input class="input" id="rs-motivo" placeholder="Vuelta del receso, conteo en cero…">
+      </div>
+      <button class="btn btn--danger btn--block" id="rs-ok">Poner todo en cero</button>
+      <button class="btn btn--block" data-close>Cancelar</button>
+    </div>
+  `, (root) => {
+    alGuardar(root.querySelector('#rs-ok'), async () => {
+      try {
+        const r = await reiniciarStock(root.querySelector('#rs-motivo').value);
+        ui.cerrarModal();
+        await refrescar();
+        ui.toast(`Stock en cero · ${plural(r.insumos, 'insumo', 'insumos')} y ${plural(r.productos, 'producto', 'productos')}`);
+      } catch (e) {
+        ui.toast(e.message || 'No se pudo reiniciar', true);
+      }
+    }, 'Reiniciando…');
+  });
 }
 
 /** Agrupa por categoría respetando el orden de la góndola, no el alfabético. */
@@ -782,7 +1235,7 @@ function modalAccionesInsumo(id) {
       ${gestiona() ? `<button class="btn btn--block" id="a-editar">Editar insumo</button>` : ''}
     </div>
   `, (root) => {
-    root.querySelector('#a-compra')?.addEventListener('click', () => modalCompra(i.id));
+    root.querySelector('#a-compra')?.addEventListener('click', () => hojaCompra({ insumoId: i.id }));
     root.querySelector('#a-ajuste').addEventListener('click', () => modalAjusteInsumo(i.id));
     root.querySelector('#a-editar')?.addEventListener('click', () => modalInsumo(i));
   });
@@ -841,10 +1294,7 @@ function modalInsumo(insumo = null) {
 
       try {
         if (esNuevo) {
-          await db.from('insumo').insert({
-            unidad_negocio_id: state.unidadNegocio.id,
-            ...datos, costo_unitario: 0, stock_actual: 0, activo: true,
-          });
+          await crearInsumo(datos);
         } else {
           await guardarInsumo(insumo.id, datos);
         }
@@ -859,82 +1309,228 @@ function modalInsumo(insumo = null) {
   });
 }
 
-function modalCompra(insumoId) {
-  const i = state.insumoPorId(insumoId);
+/* ------------------------------------------------------------------ */
+/*  2 · Compras                                                        */
+/* ------------------------------------------------------------------ */
+
+async function pantallaCompras(cont) {
+  const desde = hoyISO(ui.inicioSemana());
+  const hasta = hoyISO(ui.finSemana());
+  const compras = (await db.from('compra_insumo').select().gte('fecha', desde).lte('fecha', hasta))
+    .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.created_at).localeCompare(String(a.created_at)));
+  const total = compras.reduce((a, c) => a + (c.costo_total || 0), 0);
+
+  cont.innerHTML = `
+    <button class="btn btn--primary btn--block" data-accent="produccion" id="cp-nueva">Registrar compra</button>
+
+    <div class="between" style="margin:var(--sp-5) 0 var(--sp-3)">
+      <span class="dim">${ui.rangoSemana()}</span>
+      ${compras.length ? `<b class="num">${ui.money(total)}</b>` : ''}
+    </div>
+
+    ${compras.length ? `<div class="lista">${compras.map((c) => {
+      const i = state.insumoPorId(c.insumo_id);
+      return `
+        <div class="fila">
+          <div class="fila__main">
+            <div class="fila__titulo">${ui.esc(i?.nombre || 'Insumo borrado')}</div>
+            <div class="fila__meta">
+              <span class="num">${ui.cantidad(c.cantidad, i?.unidad_medida)}</span>
+              <span class="dim">·</span>${ui.fecha(c.fecha)}
+              ${c.proveedor ? `<span class="dim">·</span>${ui.esc(c.proveedor)}` : ''}
+            </div>
+          </div>
+          <div class="fila__lado"><span class="num">${ui.money(c.costo_total)}</span></div>
+        </div>`;
+    }).join('')}</div>`
+    : '<p class="faint" style="margin:0">Esta semana no hay compras cargadas.</p>'}`;
+
+  cont.querySelector('#cp-nueva').addEventListener('click', () => hojaCompra());
+}
+
+/**
+ * La hoja de compra. Se abre desde Compras (eligiendo el insumo) o desde la
+ * ficha de un insumo en Stock (ya elegido).
+ *
+ * El insumo se busca escribiendo; si no existe se da de alta al vuelo, porque
+ * la compra se carga con el ticket en la mano y no hay que ir a otra pantalla.
+ * La cantidad puede ir en otra unidad de la misma familia: 500 g de algo que se
+ * mide en kg se guarda como 0,5 kg.
+ */
+function hojaCompra({ insumoId = null } = {}) {
+  let sel = insumoId ? state.insumoPorId(insumoId) : null;
+  let nuevo = null;            // nombre del insumo a crear, si no existe
+  let medio = 'efectivo';
 
   ui.abrirModal(`
-    <h3>Compra de ${ui.esc(i.nombre)}</h3>
+    <h3>Registrar compra</h3>
     <div class="stack" style="margin-top:var(--sp-4)">
-      <div class="row">
+      <div id="hc-insumo"></div>
+      <div class="row" id="hc-alta" hidden>
         <div class="field grow">
-          <label for="c-cant">Cantidad (${ui.esc(i.unidad_medida)})</label>
-          <input class="input" id="c-cant" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+          <label for="hc-cat">Categoría</label>
+          <select class="input" id="hc-cat">${CATEGORIAS_INSUMO.map((c) => `<option>${c}</option>`).join('')}</select>
         </div>
         <div class="field grow">
-          <label for="c-total">Costo total</label>
-          <input class="input" id="c-total" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+          <label for="hc-base">Se mide en</label>
+          <select class="input" id="hc-base">${calc.UNIDADES.map((u) => `<option>${u}</option>`).join('')}</select>
         </div>
       </div>
-      <div class="calculo" id="c-unit">—</div>
       <div class="row">
         <div class="field grow">
-          <label for="c-prov">Proveedor</label>
-          <input class="input" id="c-prov" placeholder="opcional" value="${ui.esc(i.proveedor_habitual || '')}">
+          <label for="hc-cant">Cantidad</label>
+          <input class="input" id="hc-cant" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
         </div>
-        <div class="field grow">
-          <label for="c-fecha">Fecha</label>
-          <input class="input" id="c-fecha" type="date" value="${hoyISO()}">
+        <div class="field">
+          <label for="hc-um">Unidad</label>
+          <select class="input" id="hc-um"></select>
         </div>
       </div>
       <div class="field">
-        <label for="c-medio">Se pagó con</label>
-        <select class="input" id="c-medio">
-          <option value="efectivo">Efectivo</option>
-          <option value="transferencia">Transferencia</option>
-          <option value="mercadopago">Mercado Pago</option>
-        </select>
+        <label for="hc-total">Costo total</label>
+        <input class="input" id="hc-total" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+      </div>
+      <div class="calculo" id="hc-calc">—</div>
+      <div class="row">
+        <div class="field grow">
+          <label for="hc-prov">Proveedor</label>
+          <input class="input" id="hc-prov" placeholder="opcional">
+        </div>
+        <div class="field grow">
+          <label for="hc-fecha">Fecha</label>
+          <input class="input" id="hc-fecha" type="date" value="${hoyISO()}">
+        </div>
+      </div>
+      <div class="medios" id="hc-medios" style="margin:0">
+        ${MEDIOS.map((m) => `
+          <button class="medio ${m.id === medio ? 'sel' : ''}" data-medio="${m.id}">
+            <svg viewBox="0 0 24 24">${m.svg}</svg>${m.etiqueta}
+          </button>`).join('')}
       </div>
       <p class="faint" style="margin:0">Se descuenta solo de la caja como egreso.</p>
-      <button class="btn btn--primary btn--block" data-accent="produccion" id="c-guardar">Registrar compra</button>
+      <button class="btn btn--primary btn--block" data-accent="produccion" id="hc-guardar">Registrar compra</button>
     </div>
   `, (root) => {
-    const cant = root.querySelector('#c-cant');
-    const total = root.querySelector('#c-total');
-    const salida = root.querySelector('#c-unit');
+    const $ = (q) => root.querySelector(q);
+    const cant = $('#hc-cant'), total = $('#hc-total'), um = $('#hc-um'), salida = $('#hc-calc');
+
+    /** La unidad en la que se guarda: la del insumo, o la elegida para el nuevo. */
+    const base = () => sel?.unidad_medida || (nuevo ? $('#hc-base').value : null);
+
+    function pintarUnidades() {
+      const b = base();
+      const previa = um.value;
+      const opciones = b ? calc.unidadesCompatibles(b) : calc.UNIDADES;
+      um.innerHTML = opciones.map((u) => `<option ${u === (opciones.includes(previa) ? previa : b) ? 'selected' : ''}>${u}</option>`).join('');
+    }
+
+    function pintarInsumo() {
+      const caja = $('#hc-insumo');
+      $('#hc-alta').hidden = !nuevo;
+
+      if (sel || nuevo) {
+        caja.innerHTML = `
+          <div class="between">
+            <div style="min-width:0">
+              <div class="dim" style="font-size:.78rem">${nuevo ? 'Insumo nuevo' : 'Insumo'}</div>
+              <b>${ui.esc(sel?.nombre || nuevo)}</b>
+              ${sel ? `<span class="faint num"> · hay ${ui.cantidad(sel.stock_actual || 0, sel.unidad_medida)}</span>` : ''}
+            </div>
+            ${insumoId ? '' : '<button class="btn btn--ghost" id="hc-cambiar">Cambiar</button>'}
+          </div>`;
+        $('#hc-cambiar')?.addEventListener('click', () => { sel = null; nuevo = null; pintarInsumo(); });
+        if (sel && !$('#hc-prov').value) $('#hc-prov').value = sel.proveedor_habitual || '';
+      } else {
+        caja.innerHTML = `
+          <div class="field">
+            <label for="hc-buscar">Insumo</label>
+            <input class="input" id="hc-buscar" placeholder="Buscá o escribí uno nuevo" autocomplete="off">
+          </div>
+          <div class="chips" id="hc-res" style="margin-top:var(--sp-2)"></div>`;
+        const buscar = $('#hc-buscar');
+        const pintarResultados = () => {
+          const q = buscar.value.trim();
+          const k = q.toLocaleLowerCase('es');
+          const hits = state.insumos
+            .filter((i) => i.activo !== false && i.nombre.toLocaleLowerCase('es').includes(k))
+            .slice(0, 12);
+          const exacto = hits.some((i) => i.nombre.toLocaleLowerCase('es') === k);
+          $('#hc-res').innerHTML = hits.map((i) => `<button class="chip" data-id="${i.id}">${ui.esc(i.nombre)}</button>`).join('')
+            + (q && !exacto ? `<button class="chip" data-crear>+ Crear «${ui.esc(q)}»</button>` : '');
+        };
+        buscar.addEventListener('input', pintarResultados);
+        $('#hc-res').addEventListener('click', (e) => {
+          const chip = e.target.closest('.chip');
+          if (!chip) return;
+          if (chip.dataset.id) sel = state.insumoPorId(chip.dataset.id);
+          else nuevo = buscar.value.trim();
+          pintarInsumo();
+          cant.focus();
+        });
+        pintarResultados();
+      }
+      pintarUnidades();
+      preview();
+    }
 
     function preview() {
+      const b = base();
       const c = Number(cant.value), t = Number(total.value);
-      if (!(c > 0) || !(t >= 0)) { salida.textContent = '—'; return; }
-      const unit = t / c;
-      const previo = i.costo_unitario || 0;
-      const nuevo = calc.costoPonderado(i.stock_actual || 0, previo, c, unit);
+      if (!b || !(c > 0) || !(total.value !== '' && t >= 0)) { salida.textContent = '—'; return; }
+      const enBase = calc.convertir(c, um.value, b);
+      const unit = t / enBase;
+      const previo = sel?.costo_unitario || 0;
+      const costoNuevo = calc.costoPonderado(sel?.stock_actual || 0, previo, enBase, unit);
       salida.innerHTML = `
-        <div>Pagás <b class="num">${ui.money(unit)}</b> por ${ui.esc(i.unidad_medida)}</div>
-        <div class="faint">El costo del insumo queda en
-          <b class="num">${ui.money(nuevo)}</b>${previo ? ` (venía de ${ui.money(previo)})` : ''}</div>`;
+        <div>Pagás <b class="num">${ui.money(unit)}</b> por ${ui.esc(b)}</div>
+        ${sel ? `<div class="faint">El costo del insumo queda en
+          <b class="num">${ui.money(costoNuevo)}</b>${previo ? ` (venía de ${ui.money(previo)})` : ''}</div>` : ''}`;
     }
-    cant.addEventListener('input', preview);
-    total.addEventListener('input', preview);
 
-    alGuardar(root.querySelector('#c-guardar'), async () => {
+    [cant, total, um].forEach((el) => el.addEventListener('input', preview));
+    $('#hc-base').addEventListener('change', () => { pintarUnidades(); preview(); });
+
+    $('#hc-medios').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-medio]');
+      if (!b) return;
+      medio = b.dataset.medio;
+      root.querySelectorAll('[data-medio]').forEach((x) => x.classList.toggle('sel', x === b));
+    });
+
+    alGuardar($('#hc-guardar'), async () => {
+      if (!sel && !nuevo) return ui.toast('Elegí el insumo', true);
+      if (!(Number(cant.value) > 0)) return ui.toast('Falta la cantidad', true);
+      if (total.value === '' || !(Number(total.value) >= 0)) return ui.toast('Falta el costo total', true);
+
       try {
-        const { alertas } = await registrarCompra({
-          insumoId,
-          cantidad: cant.value,
+        if (nuevo) {
+          // Se crea recién al guardar. Si después falla la compra, el insumo ya
+          // queda elegido para reintentar sin duplicarlo
+          sel = await crearInsumo({ nombre: nuevo, categoria: $('#hc-cat').value, unidad_medida: $('#hc-base').value });
+          nuevo = null;
+          await state.cargar();
+        }
+        const { alertas, costoNuevo } = await registrarCompra({
+          insumoId: sel.id,
+          cantidad: calc.convertir(Number(cant.value), um.value, sel.unidad_medida),
           costoTotal: total.value,
-          proveedor: root.querySelector('#c-prov').value.trim(),
-          fecha: root.querySelector('#c-fecha').value || hoyISO(),
-          medio: root.querySelector('#c-medio').value,
+          proveedor: $('#hc-prov').value.trim(),
+          fecha: $('#hc-fecha').value || hoyISO(),
+          medio,
         });
         ui.cerrarModal();
         await refrescar();
         if (alertas.length) modalAlertasMargen(alertas);
-        else ui.toast('Compra registrada');
+        else ui.toast(`Compra registrada · ${ui.money(costoNuevo)} por ${ui.unidadCorta(sel.unidad_medida)}`);
       } catch (err) {
         console.error(err);
+        pintarInsumo();
         ui.toast(err.message || 'No se pudo registrar la compra', true);
       }
     });
+
+    pintarInsumo();
+    if (!sel) $('#hc-buscar')?.focus();
   });
 }
 
@@ -1002,7 +1598,7 @@ function modalAjuste({ titulo, actual, valor, onGuardar }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  2 · Recetas                                                        */
+/*  3 · Recetas                                                        */
 /* ------------------------------------------------------------------ */
 
 async function pantallaRecetas(cont) {
@@ -1067,8 +1663,8 @@ function editorReceta(productoId, recetaOriginal) {
   if (!state.insumos.length) {
     return ui.abrirModal(`
       <h3>${ui.esc(p.nombre)}</h3>
-      <p class="dim">Todavía no hay insumos cargados. Cargalos en la pestaña
-      Insumos y volvé a entrar acá.</p>
+      <p class="dim">Todavía no hay insumos cargados. Registrá una compra en la
+      pestaña Compras y volvé a entrar acá.</p>
       <button class="btn btn--block" data-close>Cerrar</button>`);
   }
 
@@ -1185,7 +1781,7 @@ function editorReceta(productoId, recetaOriginal) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  3 · Órdenes de producción                                          */
+/*  4 · Producción — órdenes                                           */
 /* ------------------------------------------------------------------ */
 
 const ESTADO_ORDEN = {
@@ -1458,55 +2054,4 @@ function modalCerrarOrden(ordenId, items, reqs, valores = null) {
       }
     });
   });
-}
-
-/* ------------------------------------------------------------------ */
-/*  4 · Stock terminado                                                */
-/* ------------------------------------------------------------------ */
-
-async function pantallaStock(cont) {
-  const productos = state.productos.filter((p) => p.activo);
-
-  if (!productos.length) {
-    cont.innerHTML = ui.vacio({
-      modulo: 'produccion', icono: '\u{1F4E6}', titulo: 'Sin productos',
-      texto: 'Acá se ve qué hay hecho de cada cosa.',
-    });
-    return;
-  }
-
-  const valor = productos.reduce((a, p) => a + (p.stock_actual || 0) * calc.costoEfectivo(p), 0);
-
-  cont.innerHTML = `
-    ${verCostos() ? `
-      <div class="stat" style="margin-bottom:var(--sp-4)">
-        <div class="label">Valor del stock terminado</div>
-        <div class="value">${ui.money(valor)}</div>
-      </div>` : ''}
-
-    <table class="table table--stack">
-      <thead>
-        <tr><th>Producto</th><th class="right">Stock</th><th class="right">Mínimo</th><th></th></tr>
-      </thead>
-      <tbody>
-        ${productos.map((p) => `
-          <tr data-stock="${p.id}">
-            <td data-label="Producto">${ui.esc(p.nombre)}</td>
-            <td data-label="Stock" class="num right">${p.stock_actual || 0}</td>
-            <td data-label="Mínimo" class="num right">${p.stock_minimo || 0}</td>
-            <td data-label="Estado" class="right">${ui.badgeStock(p.stock_actual || 0, p.stock_minimo || 0)}</td>
-          </tr>`).join('')}
-      </tbody>
-    </table>
-    <p class="faint">Tocá un producto para ajustar lo que hay de verdad.</p>`;
-
-  cont.querySelectorAll('[data-stock]').forEach((el) => el.addEventListener('click', () => {
-    const p = state.productoPorId(el.dataset.stock);
-    modalAjuste({
-      titulo: `Ajustar ${p.nombre}`,
-      actual: `${p.stock_actual || 0} ${p.unidad_venta === 'unidad' ? 'unidades' : p.unidad_venta}`,
-      valor: p.stock_actual || 0,
-      onGuardar: (nuevo, motivo) => ajustarStockProducto(p.id, nuevo, motivo),
-    });
-  }));
 }
