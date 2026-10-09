@@ -219,7 +219,9 @@ export function tarifaVigente(tarifas = [], fecha, fallback = 0) {
  * @param {Array}  datos.pedidos    pedidos con estado 'entregado' del período
  * @param {Array}  datos.items      pedido_item de esos pedidos (con snapshots)
  * @param {Array}  datos.jornadas   jornadas confirmadas del período
- * @param {Array}  datos.gastos     movimiento_caja con origen 'gasto_operativo'
+ * @param {Array}  datos.gastos     movimiento_caja con origen 'gasto_operativo'.
+ *                                  Un gasto anulado deja su contramovimiento
+ *                                  como ingreso, que acá resta.
  */
 export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos = [] }) {
   const idsEntregados = new Set(pedidos.filter((p) => p.estado === 'entregado').map((p) => p.id));
@@ -238,7 +240,8 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
     .filter((j) => j.confirmada)
     .reduce((a, j) => a + j.tarifa_aplicada, 0);
 
-  const gastosOperativos = gastos.reduce((a, g) => a + g.monto, 0);
+  const gastosOperativos = gastos.reduce(
+    (a, g) => a + (g.tipo === 'ingreso' ? -g.monto : g.monto), 0);
 
   const margenBruto = ventas - costoMercaderia;
   const gananciaNeta = margenBruto - costoLaboral - gastosOperativos;

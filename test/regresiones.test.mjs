@@ -499,5 +499,34 @@ await db.from('jornada').insert({
 const liqFutura = await tira(() => eq.liquidarSemana(manana, manana));
 t('liquidar no alcanza una jornada de mañana ni cargada a mano', !!liqFutura);
 
+/* ================================================================== */
+console.log('\n── un PIN equivocado no traba el teclado');
+
+// login.js llamaba a un esc() que no existía: el error cortaba pintar() antes
+// de vaciar el PIN, y con el PIN lleno el teclado ignoraba todo. Quien se
+// equivocaba un dígito quedaba trabada hasta recargar.
+const loginRoot = document.createElement('div');
+loginRoot.id = 'login';
+document.body.appendChild(loginRoot);
+await db.from('config').delete().eq('clave', 'admin_pin');
+
+const { mostrarLogin } = await import('../js/login.js');
+mostrarLogin();
+await esperar(150);
+
+const tipear = async (pin) => {
+  for (const d of pin) { clic(loginRoot.querySelector(`[data-d="${d}"]`)); await esperar(20); }
+  await esperar(250);
+};
+const puntos = () => loginRoot.querySelectorAll('.login__puntos i.on').length;
+
+await tipear('1357');
+await tipear('2468');   // no coincide con el primero: fallar()
+t('el error se muestra', /incorrecto/i.test(loginRoot.textContent));
+await esperar(800);
+clic(loginRoot.querySelector('[data-d="5"]'));
+await esperar(30);
+t('y el teclado vuelve a responder', puntos() === 1);
+
 console.log(`\n${ok} pasaron · ${mal} fallaron\n`);
 process.exit(mal ? 1 : 0);

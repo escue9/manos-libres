@@ -115,5 +115,40 @@ Los que más valen son los que verifican que **no** pase algo:
 - [ ] Filtro por rubro dentro de los gastos, cuando haya volumen suficiente
 - [ ] Comparar el cierre contra el promedio de las últimas cuatro semanas, no
       solo contra la anterior
-- [ ] Editar o anular un movimiento manual cargado con un error de tipeo
+- [x] Editar o anular un movimiento manual cargado con un error de tipeo — ver
+      el addendum de abajo
 - [ ] Que la rentabilidad permita elegir un rango de fechas arbitrario
+
+---
+
+## Addendum — anular un movimiento manual
+
+Un gasto tipeado con un cero de más no tenía arreglo salvo la consola. Ahora en
+**Movimientos** los manuales vigentes (gasto, aporte, retiro) se tocan y abren
+su detalle con dos salidas: **Anular y cargar corregido** —que abre el alta
+precargada— o **Solo anular**. Las dos piden motivo.
+
+`anularMovimiento(id, motivo)` no borra nada. Deja un contramovimiento del tipo
+opuesto, mismo origen, monto y rubro, con `referencia_id` al original, igual
+que `anularPedido()` con los cobros. No hizo falta migración: el esquema ya
+tenía todo.
+
+**Lleva la fecha del original, no la de hoy.** La devolución de un pedido es
+plata que salió hoy; un error de carga es plata que nunca se movió. Con la
+fecha de hoy, la semana del error seguiría mostrando el gasto falso.
+
+Lo que tuvo que cambiar alrededor para que la anulación no ensucie números:
+
+- `calc.cierreSemanal()` resta los gastos de tipo ingreso, que son anulaciones.
+  Antes sumaba el monto sin mirar el tipo y el gasto anulado contaba doble
+- "Caja de la semana" deja afuera el par anulado: sin eso, un gasto de $85.000
+  anulado inflaba el *entró* y el *salió* en $85.000 cada uno
+- La rendición de cuentas muestra el neto por rubro. Antes, un rubro con los
+  dos sentidos —un cobro y su devolución— mostraba solo el ingreso
+
+Los automáticos (cobro, compra, jornal) no se anulan desde la caja: se deshacen
+desde su origen, o la caja queda descolgada del pedido o la compra.
+
+De paso se corrigió el pie de los reportes impresos, que nombraba a Mirmidones
+como titular, y el texto del reporte de impacto, que decía "trabajo registrado"
+cuando el vínculo laboral todavía no está formalizado.

@@ -217,5 +217,68 @@ t('y sí puede exportar', auth.puede('exportar'));
 auth.rol = 'admin';
 
 /* ================================================================== */
+console.log('\n── anular un movimiento manual');
+
+// Un gasto de hace diez días, tipeado con un cero de más: tiene que poder
+// corregirse en SU semana, no en la de hoy.
+const haceDiez = (() => {
+  const d = new Date(); d.setDate(d.getDate() - 10);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+})();
+
+const movsAntes = await db.from('movimiento_caja').select();
+const saldoPrevio = calc.saldoCaja(movsAntes);
+const gastosDe = (movs, fecha) => calc.cierreSemanal({
+  gastos: movs.filter((m) => m.origen === 'gasto_operativo' && m.fecha === fecha),
+}).gastosOperativos;
+const gastoAntes = gastosDe(movsAntes, haceDiez);
+
+const errado = await caja.registrarMovimiento({
+  origen: 'gasto_operativo', monto: 85000, fecha: haceDiez,
+  categoriaGasto: 'Gas', descripcion: 'Garrafa',
+});
+
+t('sin motivo no se anula', !!(await tira(() => caja.anularMovimiento(errado.id, '  '))));
+
+const contra = await caja.anularMovimiento(errado.id, 'era 8.500');
+t('el contramovimiento es del tipo opuesto', contra.tipo === 'ingreso');
+t('mismo origen, monto y rubro', contra.origen === 'gasto_operativo'
+  && contra.monto === 85000 && contra.categoria_gasto === 'Gas');
+t('lleva la fecha del original, no la de hoy', contra.fecha === haceDiez);
+t('y apunta al original', contra.referencia_id === errado.id);
+
+const movsDespues = await db.from('movimiento_caja').select();
+t('el original NO se borra', movsDespues.some((m) => m.id === errado.id));
+t('el saldo vuelve a como estaba', cerca(calc.saldoCaja(movsDespues), saldoPrevio));
+t('el gasto de esa semana vuelve a como estaba',
+  cerca(gastosDe(movsDespues, haceDiez), gastoAntes));
+
+t('no se anula dos veces',
+  !!(await tira(() => caja.anularMovimiento(errado.id, 'otra vez'))));
+t('ni se anula la anulación',
+  !!(await tira(() => caja.anularMovimiento(contra.id, 'deshacer'))));
+
+const retiroErrado = await caja.registrarMovimiento({ origen: 'retiro', monto: 300 });
+const enParalelo = await Promise.allSettled([
+  caja.anularMovimiento(retiroErrado.id, 'uno'),
+  caja.anularMovimiento(retiroErrado.id, 'dos'),
+]);
+const contras = (await db.from('movimiento_caja').select().eq('referencia_id', retiroErrado.id));
+t('dos anulaciones en paralelo dejan una sola', contras.length === 1
+  && enParalelo.filter((r) => r.status === 'fulfilled').length === 1);
+
+const automatico = movsDespues.find((m) => m.origen === 'cobro' && m.tipo === 'ingreso');
+if (automatico) {
+  err = await tira(() => caja.anularMovimiento(automatico.id, 'probando'));
+  t('un cobro automático no se anula desde la caja', !!err && /su pantalla/.test(err.message));
+}
+
+auth.rol = 'dirigente';
+err = await tira(() => caja.anularMovimiento(retiroErrado.id, 'x'));
+t('la comisión no anula: mira, no opera', !!err && !/ya está anulado/.test(err.message));
+auth.rol = 'admin';
+
+/* ================================================================== */
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
 process.exit(mal ? 1 : 0);

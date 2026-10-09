@@ -17,6 +17,10 @@
  * REGLA 6: los movimientos de cobro, compra de insumo y jornal los generan sus
  * propios módulos. Acá solo se cargan a mano gasto_operativo, aporte y retiro.
  * Cargar un ingreso a mano además del automático produce doble conteo.
+ *
+ * Un movimiento manual cargado mal no se borra: se anula con un
+ * contramovimiento del tipo opuesto que apunta al original por referencia_id.
+ * Ver anularMovimiento().
  */
 
 import { db } from '../db.js';
@@ -77,6 +81,14 @@ let periodoRent = 'mes';
 const hoyISO = () => ui.hoyISO();
 const puedeCargar = () => auth.puede('cargarCaja');
 
+const esManual = (m) => ORIGENES_MANUALES.some((o) => o.id === m.origen);
+
+/**
+ * Un manual con referencia_id es el contramovimiento de una anulación: los
+ * manuales originales nacen sin referencia (registrarMovimiento).
+ */
+const esAnulacion = (m) => esManual(m) && !!m.referencia_id;
+
 /* ------------------------------------------------------------------ */
 /*  Datos                                                              */
 /* ------------------------------------------------------------------ */
@@ -120,9 +132,13 @@ async function cierreDe(desde, hasta) {
     gastos: delRango.filter((m) => m.origen === 'gasto_operativo'),
   });
 
-  // Percibido: lo que efectivamente entró y salió de la caja en el rango.
-  const ingresos = delRango.filter((m) => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
-  const egresos = delRango.filter((m) => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0);
+  // Percibido: lo que efectivamente entró y salió de la caja en el rango. Un
+  // manual anulado y su anulación se cancelan y se dejan afuera: es plata que
+  // nunca se movió, y sumada inflaba el "entró" y el "salió" por igual.
+  const anulados = new Set(movimientos.filter(esAnulacion).map((m) => m.referencia_id));
+  const vigentes = delRango.filter((m) => !esAnulacion(m) && !anulados.has(m.id));
+  const ingresos = vigentes.filter((m) => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
+  const egresos = vigentes.filter((m) => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0);
 
   return {
     devengado,
@@ -203,6 +219,8 @@ async function pantallaMovimientos(cont, vista) {
     return;
   }
 
+  const anulados = new Set(movimientos.filter(esAnulacion).map((m) => m.referencia_id));
+
   const visibles = filtroMov === 'todos'
     ? movimientos
     : movimientos.filter((m) => m.tipo === filtroMov);
@@ -223,7 +241,7 @@ async function pantallaMovimientos(cont, vista) {
     </div>
 
     ${visibles.length
-      ? `<div class="lista">${visibles.map(filaMovimiento).join('')}</div>`
+      ? `<div class="lista" id="movs">${visibles.map((m) => filaMovimiento(m, anulados)).join('')}</div>`
       : '<p class="faint">No hay movimientos con ese filtro.</p>'}`;
 
   cont.querySelector('.chips').addEventListener('click', (e) => {
@@ -235,15 +253,26 @@ async function pantallaMovimientos(cont, vista) {
     if (e.target.closest('#exportar')) exportarCSV(movimientos);
   });
 
+  cont.querySelector('#movs')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mov]');
+    const mov = b && movimientos.find((m) => m.id === b.dataset.mov);
+    if (mov) modalAnular(mov, cont, vista);
+  });
+
   if (puedeCargar()) fab(cont, () => modalMovimiento(cont, vista), 'Nuevo movimiento');
 }
 
-function filaMovimiento(m) {
+function filaMovimiento(m, anulados = new Set()) {
   const entra = m.tipo === 'ingreso';
-  const manual = ORIGENES_MANUALES.some((o) => o.id === m.origen);
+  const manual = esManual(m);
+  const anulado = anulados.has(m.id);
+  const anulacion = esAnulacion(m);
+  // Solo se toca un manual vigente, y solo quien carga la caja
+  const tocable = manual && !anulado && !anulacion && puedeCargar();
+  const tag = tocable ? 'button' : 'div';
 
   return `
-    <div class="fila">
+    <${tag} class="fila${anulado ? ' fila--anulada' : ''}"${tocable ? ` data-mov="${ui.esc(m.id)}"` : ''}>
       <div class="fila__main">
         <div class="fila__titulo">${ui.esc(m.descripcion || ORIGENES[m.origen] || 'Movimiento')}</div>
         <div class="fila__meta">
@@ -253,6 +282,8 @@ function filaMovimiento(m) {
           ${m.categoria_gasto ? `<span class="dim">·</span><span>${ui.esc(m.categoria_gasto)}</span>` : ''}
           ${m.medio ? `<span class="dim">·</span><span>${ui.esc(medioEtiqueta(m.medio))}</span>` : ''}
           ${manual ? '' : '<span class="dim">·</span><span class="faint">automático</span>'}
+          ${anulado ? '<span class="badge badge--danger">anulado</span>' : ''}
+          ${anulacion ? '<span class="badge badge--warn">anulación</span>' : ''}
         </div>
       </div>
       <div class="fila__lado">
@@ -260,7 +291,7 @@ function filaMovimiento(m) {
           ${entra ? '+' : '−'}${ui.money(m.monto).replace('-', '')}
         </span>
       </div>
-    </div>`;
+    </${tag}>`;
 }
 
 const medioEtiqueta = (id) => MEDIOS.find((m) => m.id === id)?.etiqueta || id || '';
@@ -269,11 +300,12 @@ const medioEtiqueta = (id) => MEDIOS.find((m) => m.id === id)?.etiqueta || id ||
  * Alta manual. Solo gasto, aporte y retiro: el resto lo genera su módulo y
  * cargarlo de nuevo acá contaría la misma plata dos veces (regla 6).
  */
-function modalMovimiento(cont, vista) {
-  let origen = 'gasto_operativo';
+function modalMovimiento(cont, vista, previo = null) {
+  let origen = previo?.origen || 'gasto_operativo';
+  const valor = (campo, porDefecto = '') => ui.esc(previo?.[campo] ?? porDefecto);
 
   ui.abrirModal(`
-    <h3>Nuevo movimiento</h3>
+    <h3>${previo ? 'Cargar corregido' : 'Nuevo movimiento'}</h3>
     <p class="faint">Los cobros, las compras de insumo y los jornales se generan
       solos desde su pantalla. Cargarlos acá contaría la plata dos veces.</p>
 
@@ -289,32 +321,34 @@ function modalMovimiento(cont, vista) {
 
       <div class="field">
         <label for="m-monto">Monto</label>
-        <input class="input" id="m-monto" type="number" inputmode="decimal" min="0" step="any">
+        <input class="input" id="m-monto" type="number" inputmode="decimal" min="0" step="any" value="${valor('monto')}">
       </div>
 
-      <div class="field" id="m-campo-cat">
+      <div class="field${origen === 'gasto_operativo' ? '' : ' hidden'}" id="m-campo-cat">
         <label for="m-categoria">Rubro</label>
         <select class="input" id="m-categoria">
-          ${CATEGORIAS_GASTO.map((c) => `<option value="${c}">${c}</option>`).join('')}
+          ${CATEGORIAS_GASTO.map((c) => `
+            <option value="${c}"${c === previo?.categoria_gasto ? ' selected' : ''}>${c}</option>`).join('')}
         </select>
       </div>
 
       <div class="row">
         <div class="field grow">
           <label for="m-fecha">Fecha</label>
-          <input class="input" id="m-fecha" type="date" value="${hoyISO()}">
+          <input class="input" id="m-fecha" type="date" value="${valor('fecha', hoyISO())}">
         </div>
         <div class="field grow">
           <label for="m-medio">Medio</label>
           <select class="input" id="m-medio">
-            ${MEDIOS.map((m) => `<option value="${m.id}">${m.etiqueta}</option>`).join('')}
+            ${MEDIOS.map((m) => `
+              <option value="${m.id}"${m.id === previo?.medio ? ' selected' : ''}>${m.etiqueta}</option>`).join('')}
           </select>
         </div>
       </div>
 
       <div class="field">
         <label for="m-desc">Descripción</label>
-        <input class="input" id="m-desc" placeholder="Garrafa, flete a Uncas, aporte de socio…">
+        <input class="input" id="m-desc" placeholder="Garrafa, flete a Uncas, aporte de socio…" value="${valor('descripcion')}">
       </div>
 
       <p class="faint" id="m-error" style="color:var(--danger)"></p>
@@ -354,6 +388,56 @@ function modalMovimiento(cont, vista) {
         error.textContent = err.message;
       }
     });
+  });
+}
+
+/**
+ * Detalle de un movimiento manual, con la única acción que admite: anularlo.
+ * "Anular y cargar corregido" abre el alta precargada, que es lo que se quiere
+ * después de un error de tipeo.
+ */
+function modalAnular(mov, cont, vista) {
+  const entra = mov.tipo === 'ingreso';
+
+  ui.abrirModal(`
+    <h3>${ui.esc(mov.descripcion || ORIGENES[mov.origen])}</h3>
+    <p class="faint">${ui.fecha(mov.fecha)} · ${ui.esc(ORIGENES[mov.origen])}${
+      mov.categoria_gasto ? ` · ${ui.esc(mov.categoria_gasto)}` : ''} · ${ui.esc(medioEtiqueta(mov.medio))}</p>
+    <div class="num" style="font-size:1.6rem;margin:var(--sp-3) 0;color:var(--${entra ? 'ok' : 'danger'})">
+      ${entra ? '+' : '−'}${ui.money(mov.monto).replace('-', '')}
+    </div>
+
+    <p class="faint">Anular no lo borra: carga el mismo monto al revés, con la
+      misma fecha, y los dos quedan en la lista. El saldo y el cierre de esa
+      semana vuelven a como estaban antes del error.</p>
+
+    <div class="field" style="margin-top:var(--sp-3)">
+      <label for="an-motivo">Motivo</label>
+      <input class="input" id="an-motivo" placeholder="Monto mal tipeado, cargado dos veces…">
+    </div>
+
+    <p class="faint" id="an-error" style="color:var(--danger)"></p>
+    <div class="stack">
+      <button class="btn btn--primary btn--block" id="an-corregir">Anular y cargar corregido</button>
+      <button class="btn btn--danger btn--block" id="an-ok">Solo anular</button>
+    </div>
+  `, (root) => {
+    const anular = async (corregir) => {
+      const error = root.querySelector('#an-error');
+      error.textContent = '';
+      try {
+        await anularMovimiento(mov.id, root.querySelector('#an-motivo').value);
+        ui.cerrarModal();
+        await refrescar();
+        ui.toast('Movimiento anulado');
+        await pantallaMovimientos(cont, vista);
+        if (corregir) modalMovimiento(cont, vista, mov);
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    };
+    alGuardar(root.querySelector('#an-ok'), () => anular(false), 'Anulando…');
+    alGuardar(root.querySelector('#an-corregir'), () => anular(true), 'Anulando…');
   });
 }
 
@@ -401,6 +485,65 @@ export async function registrarMovimiento({
     categoria_gasto: origen === 'gasto_operativo' ? categoriaGasto : null,
     medio,
   });
+}
+
+/**
+ * Anula un movimiento manual cargado con error.
+ *
+ * No lo borra, por lo mismo que anularPedido() no borra los cobros: con el
+ * sync, un borrado es una fila que desaparece sin explicación del espejo, y la
+ * caja tiene que poder contarse para atrás. Deja un contramovimiento del tipo
+ * opuesto, mismo origen y monto, con referencia_id al original.
+ *
+ * Lleva la FECHA DEL ORIGINAL, no la de hoy. A diferencia de la devolución de
+ * un pedido —que es plata que salió hoy—, acá la plata nunca se movió: era un
+ * error de carga. Con la fecha de hoy, la semana del error seguiría mostrando
+ * el gasto falso y la de hoy un ingreso que no existió.
+ *
+ * Los automáticos no pasan por acá: se deshacen desde su origen (anular el
+ * pedido devuelve el cobro), o la caja queda descolgada del pedido.
+ */
+export async function anularMovimiento(movimientoId, motivo) {
+  auth.exigir('cargarCaja');
+
+  motivo = String(motivo || '').trim();
+  if (!motivo) throw new Error('La anulación necesita un motivo');
+
+  const mov = await db.from('movimiento_caja').select().eq('id', movimientoId).single();
+  if (!mov) throw new Error('Movimiento inexistente');
+  if (!esManual(mov)) {
+    throw new Error('Los cobros, las compras y los jornales se deshacen desde su pantalla, no desde la caja');
+  }
+  if (esAnulacion(mov)) throw new Error('Eso ya es una anulación: no se anula una anulación');
+
+  const anulaciones = async () => (await db.from('movimiento_caja').select()
+    .eq('referencia_id', movimientoId)).filter(esAnulacion);
+  if ((await anulaciones()).length) throw new Error('Ese movimiento ya está anulado');
+
+  const contra = await db.from('movimiento_caja').insert({
+    unidad_negocio_id: mov.unidad_negocio_id || state.unidadNegocio?.id,
+    fecha: mov.fecha,
+    tipo: mov.tipo === 'ingreso' ? 'egreso' : 'ingreso',
+    origen: mov.origen,
+    referencia_id: mov.id,
+    monto: mov.monto,
+    descripcion: `Anulación · ${motivo}`,
+    categoria_gasto: mov.categoria_gasto ?? null,
+    medio: mov.medio,
+  });
+
+  // Dos anulaciones en paralelo pasan las dos el control de arriba. Queda la
+  // de id menor y la otra se retira, para que el monto no vuelva dos veces.
+  const todas = await anulaciones();
+  if (todas.length > 1) {
+    const queda = todas.map((m) => m.id).sort()[0];
+    if (contra.id !== queda) {
+      await db.from('movimiento_caja').delete().eq('id', contra.id);
+      throw new Error('Ese movimiento ya está anulado');
+    }
+  }
+
+  return contra;
 }
 
 /* ------------------------------------------------------------------ */
@@ -630,7 +773,8 @@ function ventanaImpresion(titulo, cuerpo) {
       .pie { margin-top: 32px; color: #888; font-size: 12px; }
     </style></head><body>${cuerpo}
     <p class="pie">Manos Libres · Cocina comunitaria del CIC Barrio Movediza ·
-      Mirmidones Asociación Civil · emitido el ${ui.fecha(hoyISO())}</p>
+      Federación de Organizaciones Sociales «Mesa Solidaria Tandil» ·
+      emitido el ${ui.fecha(hoyISO())}</p>
     </body></html>`);
   w.document.close();
   w.focus();
@@ -645,9 +789,10 @@ function imprimirRendicion(desde, hasta, datos) {
     const clave = m.origen === 'gasto_operativo'
       ? `Gasto · ${m.categoria_gasto || 'Otros'}`
       : (ORIGENES[m.origen] || m.origen);
-    const actual = porRubro.get(clave) || { ingreso: 0, egreso: 0 };
-    actual[m.tipo] += m.monto;
-    porRubro.set(clave, actual);
+    // Neto con signo: un rubro puede tener los dos sentidos (un gasto y su
+    // anulación, un cobro y su devolución) y mostrar uno solo mentía.
+    const signo = m.tipo === 'ingreso' ? 1 : -1;
+    porRubro.set(clave, (porRubro.get(clave) || 0) + signo * m.monto);
   }
 
   const fila = (n, v) => `<tr><td>${n}</td><td class="n">${ui.money(v)}</td></tr>`;
@@ -658,8 +803,8 @@ function imprimirRendicion(desde, hasta, datos) {
 
     <h2>Movimientos de caja por rubro</h2>
     <table>
-      ${[...porRubro.entries()].map(([n, v]) => `
-        <tr><td>${n}</td><td class="n">${v.ingreso ? ui.money(v.ingreso) : `− ${ui.money(v.egreso)}`}</td></tr>
+      ${[...porRubro.entries()].filter(([, v]) => Math.abs(v) >= 0.005).map(([n, v]) => `
+        <tr><td>${n}</td><td class="n">${v >= 0 ? ui.money(v) : `− ${ui.money(-v)}`}</td></tr>
       `).join('')}
       <tr class="total"><td>Neto de caja</td><td class="n">${ui.money(datos.caja.neto)}</td></tr>
     </table>
@@ -706,7 +851,8 @@ async function imprimirImpacto(desde, hasta) {
       <tr class="total"><td>Pagado en jornales</td><td class="n">${ui.money(montoJornales)}</td></tr>
     </table>
 
-    <p class="sub" style="margin-top:24px">Manos Libres es la cocina comunitaria
-      de Mirmidones Asociación Civil en el CIC Barrio Movediza de Tandil. Emplea
-      con trabajo registrado a mujeres en situación de vulnerabilidad.</p>`);
+    <p class="sub" style="margin-top:24px">Manos Libres es una cocina comunitaria
+      en el CIC Barrio Movediza de Tandil, impulsada por la Federación de
+      Organizaciones Sociales «Mesa Solidaria Tandil». Da trabajo a mujeres
+      cuyas parejas atraviesan el contexto de encierro.</p>`);
 }

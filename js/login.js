@@ -11,6 +11,7 @@
  */
 
 import { auth } from './auth.js';
+import { ui } from './ui.js';
 
 const N = auth.LARGO_PIN;
 
@@ -83,7 +84,7 @@ export function mostrarLogin() {
           </div>
 
           <div class="login__msg${error ? ' err' : ''}">${
-            error ? esc(error === true ? 'PIN incorrecto' : error) : '&nbsp;'}</div>
+            error ? ui.esc(error === true ? 'PIN incorrecto' : error) : '&nbsp;'}</div>
 
           <div class="numpad">
             ${[1,2,3,4,5,6,7,8,9].map((d) => `<button data-d="${d}">${d}</button>`).join('')}

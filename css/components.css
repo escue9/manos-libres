@@ -396,6 +396,10 @@ body.con-login { overflow: hidden; }
 .fila__meta   { display: flex; flex-wrap: wrap; gap: 5px; color: var(--text-dim); font-size: .8rem; }
 .fila__lado   { flex: none; }
 
+/* Movimiento anulado: queda a la vista, pero no se lee como plata vigente */
+.fila--anulada .fila__titulo,
+.fila--anulada .num { text-decoration: line-through; color: var(--text-dim) !important; }
+
 /* Fila de una tabla con faltante de insumo */
 .fila--falta td { color: var(--danger); }
 
