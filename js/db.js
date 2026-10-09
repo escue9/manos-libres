@@ -24,8 +24,10 @@ const DB_NAME = 'cocina_cic';
  *         cliente. Se separa en `canal` + `modo_entrega`.
  *  3 → 4  aparece el store `borrado`: las lápidas que necesita el sync para
  *         poder contarle al servidor lo que se borró estando sin señal.
+ *  4 → 5  aparece `pago_produccion`: se cobra por lo producido, no por día.
+ *         Es una tabla nueva y nada más; lo que ya estaba no se toca.
  */
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 export const TABLES = [
   'config',
@@ -45,6 +47,7 @@ export const TABLES = [
   'trabajadora',
   'tarifa_historica',
   'jornada',
+  'pago_produccion',
   'movimiento_caja',
 ];
 
@@ -75,6 +78,7 @@ const INDEXES = {
   trabajadora: ['unidad_negocio_id', 'activa'],
   tarifa_historica: ['trabajadora_id'],
   jornada: ['trabajadora_id', 'fecha', 'orden_produccion_id', 'estado_pago'],
+  pago_produccion: ['trabajadora_id', 'fecha', 'orden_produccion_id', 'estado_pago'],
   movimiento_caja: ['unidad_negocio_id', 'fecha', 'tipo', 'origen'],
 };
 
@@ -565,8 +569,8 @@ export async function seed() {
   ]);
 
   await db.from('trabajadora').insert([
-    { unidad_negocio_id: un.id, nombre: 'Ana',   tarifa_dia: 5000, activa: true },
-    { unidad_negocio_id: un.id, nombre: 'María', tarifa_dia: 5000, activa: true },
+    { unidad_negocio_id: un.id, nombre: 'Ana',   tarifa_dia: 0, activa: true },   // se cobra por producción
+    { unidad_negocio_id: un.id, nombre: 'María', tarifa_dia: 0, activa: true },
   ]);
 
   return un;

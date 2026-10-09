@@ -121,19 +121,14 @@ console.log('\n── orden de producción');
 const ana = state.trabajadoras.find((x) => x.nombre === 'Ana');
 const maria = state.trabajadoras.find((x) => x.nombre === 'María');
 
-// La tarifa vigente al día de la orden, que no es la de la ficha
-await db.from('tarifa_historica').insert({
-  trabajadora_id: ana.id, tarifa_dia: 6000, vigente_desde: '2026-01-01',
-});
-
 const orden = await prod.crearOrden({ items: [{ producto_id: empanada.id, cantidad: 48 }] });
 t('la orden nace planificada', orden.estado === 'planificada');
 
 let jornadas = await prod.asignarTrabajadoras(orden.id, [ana.id, maria.id]);
 t('asignar crea una jornada por trabajadora', jornadas.length === 2);
 t('la jornada se vincula a la orden', jornadas.every((j) => j.orden_produccion_id === orden.id));
-t('congela la tarifa histórica, no trabajadora.tarifa_dia',
-  jornadas.find((j) => j.trabajadora_id === ana.id).tarifa_aplicada === 6000 && ana.tarifa_dia === 5000);
+t('la jornada es asistencia: no lleva plata, se cobra por producción',
+  jornadas.every((j) => j.tarifa_aplicada === 0));
 t('la cargada por admin entra confirmada',
   jornadas.every((j) => j.confirmada && j.origen_carga === 'admin'));
 
@@ -143,7 +138,9 @@ t('reasignar lo mismo no duplica jornadas', jornadas.length === 2);
 jornadas = await prod.asignarTrabajadoras(orden.id, [ana.id]);
 t('sacar a alguien le borra la jornada', jornadas.length === 1);
 
-const cierre = await prod.cerrarOrden(orden.id, {}, {});   // sin tocar: cierra con lo planificado
+// Se cobra por producción: $40 por empanada a quien la hace
+await prod.fijarPagoProduccion(empanada.id, 40);
+const cierre = await prod.cerrarOrden(orden.id, {}, { productoras: ana.id });   // sin tocar: cierra con lo planificado
 const ordenCerrada = await leer('orden_produccion', orden.id);
 
 t('la orden queda cerrada', ordenCerrada.estado === 'cerrada' && !!ordenCerrada.cerrada_at);
@@ -161,12 +158,12 @@ t('suma el producto terminado', emp.stock_actual === 50 + 48);
 
 const [pitem] = await db.from('produccion_item').select().eq('orden_produccion_id', orden.id);
 t('guarda la cantidad real', pitem.cantidad_real === 48);
-t('congela el costo unitario', r2(pitem.costo_unitario_snapshot) === 287.71);
+t('congela el costo unitario: receta más lo que cobra quien la hace', r2(pitem.costo_unitario_snapshot) === 327.71);
 
 t('el costo de insumos de la orden es el de la receta por lo producido',
   cerca(cierre.costoInsumos, 287.708333 * 48, 0.5));
-t('imputa la mano de obra de las jornadas vinculadas',
-  cierre.costoManoObra === 6000 && ordenCerrada.costo_mano_obra === 6000);
+t('la mano de obra es lo que se paga por lo producido',
+  cierre.costoManoObra === 48 * 40 && ordenCerrada.costo_mano_obra === 48 * 40);
 
 const movs = await db.from('movimiento_stock_insumo').select().eq('tipo', 'produccion');
 t('deja un movimiento de stock por insumo consumido', movs.length === 3);
@@ -217,7 +214,7 @@ t('el movimiento guarda la diferencia, no el total', cerca(ajustes[0].cantidad, 
 console.log('\n── no se cierra una orden sin insumo');
 
 const grande = await prod.crearOrden({ items: [{ producto_id: empanada.id, cantidad: 2400 }] });
-err = await tira(() => prod.cerrarOrden(grande.id, {}, {}));
+err = await tira(() => prod.cerrarOrden(grande.id, {}, { productoras: ana.id }));
 
 t('sin motivo no cierra', !!err);
 t('el error dice qué insumo falta', /[Cc]arne/.test(err.message));
@@ -225,7 +222,7 @@ t('el error trae la lista de faltantes', err.faltantes?.length > 0);
 t('la orden sigue abierta', (await leer('orden_produccion', grande.id)).estado === 'planificada');
 
 const stockCarneAntes = (await leer('insumo', carne.id)).stock_actual;
-await prod.cerrarOrden(grande.id, {}, { motivoAjuste: 'Había carne de la donación sin cargar' });
+await prod.cerrarOrden(grande.id, {}, { motivoAjuste: 'Había carne de la donación sin cargar', productoras: ana.id });
 
 t('con motivo explícito sí cierra',
   (await leer('orden_produccion', grande.id)).estado === 'cerrada');
