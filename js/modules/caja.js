@@ -70,6 +70,7 @@ const PERIODOS = [
   { id: 'semana', etiqueta: 'Semana' },
   { id: 'mes',    etiqueta: 'Mes' },
   { id: 'todo',   etiqueta: 'Todo' },
+  { id: 'rango',  etiqueta: 'Rango' },
 ];
 
 /* Se recuerdan entre renders. */
@@ -77,6 +78,10 @@ let subvista = null;
 let semanaCierre = null;
 let filtroMov = 'todos';
 let periodoRent = 'mes';
+/* El rango a mano arranca en los últimos 30 días, igual que "Mes". */
+let rangoRent = null;
+/* El rubro dentro de "Salió". null = todos. */
+let rubroMov = null;
 
 const hoyISO = () => ui.hoyISO();
 const puedeCargar = () => auth.puede('cargarCaja');
@@ -105,17 +110,26 @@ function fechasDeSemana(lunes) {
   });
 }
 
-/**
- * El cierre de un rango. Devuelve el devengado (rentabilidad) y el percibido
- * (caja) por separado — nunca sumados.
- */
-async function cierreDe(desde, hasta) {
+/** Las cuatro tablas que mira un cierre, leídas una sola vez. */
+async function leerTablasCierre() {
   const [pedidos, items, jornadas, movimientos] = await Promise.all([
     db.from('pedido').select(),
     db.from('pedido_item').select(),
     db.from('jornada').select(),
     db.from('movimiento_caja').select(),
   ]);
+  return { pedidos, items, jornadas, movimientos };
+}
+
+/**
+ * El cierre de un rango. Devuelve el devengado (rentabilidad) y el percibido
+ * (caja) por separado — nunca sumados.
+ *
+ * `tablas` es opcional: el cierre semanal calcula cinco semanas de una vez
+ * (la actual y las cuatro de antes) y leer la base cinco veces no tiene sentido.
+ */
+async function cierreDe(desde, hasta, tablas = null) {
+  const { pedidos, items, jornadas, movimientos } = tablas || await leerTablasCierre();
 
   // Devengado: lo entregado en el rango, sin importar si se cobró.
   const entregados = pedidos.filter(
@@ -221,9 +235,22 @@ async function pantallaMovimientos(cont, vista) {
 
   const anulados = new Set(movimientos.filter(esAnulacion).map((m) => m.referencia_id));
 
-  const visibles = filtroMov === 'todos'
+  const porTipo = filtroMov === 'todos'
     ? movimientos
     : movimientos.filter((m) => m.tipo === filtroMov);
+
+  // El rubro solo existe en los gastos, así que solo se ofrece dentro de
+  // "Salió", y solo con los rubros que aparecen: un chip que no filtra nada
+  // es un tap perdido.
+  const rubros = filtroMov === 'egreso'
+    ? [...new Set(porTipo.filter((m) => m.origen === 'gasto_operativo')
+        .map((m) => m.categoria_gasto || 'Otros'))].sort()
+    : [];
+  if (!rubros.includes(rubroMov)) rubroMov = null;
+
+  const visibles = rubroMov
+    ? porTipo.filter((m) => m.origen === 'gasto_operativo' && (m.categoria_gasto || 'Otros') === rubroMov)
+    : porTipo;
 
   cont.innerHTML = `
     <div class="hero ${saldo >= 0 ? 'ok' : 'danger'}" data-accent="caja">
@@ -240,6 +267,14 @@ async function pantallaMovimientos(cont, vista) {
         ? '<button class="chip" id="exportar">Exportar CSV</button>' : ''}
     </div>
 
+    ${rubros.length ? `
+      <div class="chips chips--sub" id="rubros">
+        <button class="chip ${rubroMov ? '' : 'sel'}" data-rubro="">Todos los rubros</button>
+        ${rubros.map((r) => `
+          <button class="chip ${r === rubroMov ? 'sel' : ''}" data-rubro="${ui.esc(r)}">${ui.esc(r)}</button>
+        `).join('')}
+      </div>` : ''}
+
     ${visibles.length
       ? `<div class="lista" id="movs">${visibles.map((m) => filaMovimiento(m, anulados)).join('')}</div>`
       : '<p class="faint">No hay movimientos con ese filtro.</p>'}`;
@@ -251,6 +286,13 @@ async function pantallaMovimientos(cont, vista) {
       return pantallaMovimientos(cont, vista);
     }
     if (e.target.closest('#exportar')) exportarCSV(movimientos);
+  });
+
+  cont.querySelector('#rubros')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rubro]');
+    if (!b) return;
+    rubroMov = b.dataset.rubro || null;
+    pantallaMovimientos(cont, vista);
   });
 
   cont.querySelector('#movs')?.addEventListener('click', (e) => {
@@ -550,21 +592,33 @@ export async function anularMovimiento(movimientoId, motivo) {
 /*  2 · Cierre semanal                                                 */
 /* ------------------------------------------------------------------ */
 
+/** Cuántas semanas para atrás mira el promedio del cierre. */
+const SEMANAS_PROMEDIO = 4;
+
 async function pantallaCierre(cont, vista) {
   semanaCierre ||= ui.inicioSemana();
   const fechas = fechasDeSemana(semanaCierre);
 
-  const anterior = new Date(semanaCierre);
-  anterior.setDate(anterior.getDate() - 7);
-  const fechasPrevias = fechasDeSemana(anterior);
+  // Las cuatro semanas de antes, de la más cercana a la más lejana. La [0] es
+  // "la semana anterior" de siempre; las cuatro juntas son el promedio.
+  const previas = [...Array(SEMANAS_PROMEDIO)].map((_, i) => {
+    const lunes = new Date(semanaCierre);
+    lunes.setDate(lunes.getDate() - 7 * (i + 1));
+    const f = fechasDeSemana(lunes);
+    return [f[0], f[6]];
+  });
 
-  const [actual, previa] = await Promise.all([
-    cierreDe(fechas[0], fechas[6]),
-    cierreDe(fechasPrevias[0], fechasPrevias[6]),
+  const tablas = await leerTablasCierre();
+  const [actual, ...cierresPrevios] = await Promise.all([
+    cierreDe(fechas[0], fechas[6], tablas),
+    ...previas.map(([d, h]) => cierreDe(d, h, tablas)),
   ]);
 
   const c = actual.devengado;
-  const p = previa.devengado;
+  const p = cierresPrevios[0].devengado;
+
+  // Solo devengado: el promedio compara rentabilidad, no caja (regla 5).
+  const promedio = calc.promedioSemanas(cierresPrevios.map((x) => x.devengado));
 
   // Sin semana anterior no se inventa un porcentaje contra cero.
   const hayPrevia = p.ventas > 0;
@@ -591,13 +645,15 @@ async function pantallaCierre(cont, vista) {
     </div>
 
     <div class="card" style="margin-top:var(--sp-4)">
-      ${linea('Ventas', c.ventas, hayPrevia && !sinVentas ? comparar(c.ventas, p.ventas) : '')}
+      ${linea('Ventas', c.ventas)}
       ${linea('− Costo de mercadería', c.costoMercaderia)}
       ${linea('= Margen bruto', c.margenBruto, ui.pct(c.margenBrutoPct), true)}
       ${linea('− Costo laboral', c.costoLaboral)}
       ${linea('− Gastos operativos', c.gastosOperativos)}
       ${linea('= Ganancia neta', c.gananciaNeta, ui.pct(c.gananciaNetaPct), true)}
     </div>
+
+    ${sinVentas ? '' : bloqueComparativa(c, hayPrevia ? p : null, promedio)}
 
     <div class="card" style="margin-top:var(--sp-4)" data-accent="caja">
       <h3 style="font-size:.95rem">Caja de la semana</h3>
@@ -641,34 +697,101 @@ function linea(etiqueta, monto, extra = '', fuerte = false) {
     </div>`;
 }
 
-/** Variación contra la semana anterior. Quien llama decide si hay con qué. */
+/** Variación formateada. Sin base, un guion: no se inventa un porcentaje. */
 function comparar(actual, previo) {
-  if (!previo) return '';
-  const dif = ((actual - previo) / Math.abs(previo)) * 100;
+  const dif = calc.variacionPct(actual, previo);
+  if (dif == null) return '—';
   return `${dif >= 0 ? '+' : ''}${dif.toFixed(0)}%`;
+}
+
+/**
+ * La semana contra la anterior y contra el promedio de las últimas cuatro.
+ * Una semana sola engaña: si la anterior fue floja, cualquier cosa parece un
+ * salto. El promedio dice si esta semana es normal para la cocina.
+ *
+ * El promedio cuenta solo semanas con ventas (ver calc.promedioSemanas) y la
+ * nota de abajo dice cuántas entraron, para que un "promedio" de una semana
+ * no se lea como si fueran cuatro.
+ */
+function bloqueComparativa(c, previa, promedio) {
+  if (!previa && !promedio) {
+    return `
+      <div class="card comparativa" style="margin-top:var(--sp-4)">
+        <h3>Contra las semanas anteriores</h3>
+        <p class="faint">Ninguna de las últimas ${SEMANAS_PROMEDIO} semanas tuvo
+          entregas: todavía no hay contra qué comparar.</p>
+      </div>`;
+  }
+
+  const celda = (actual, base) => base == null
+    ? '<span class="faint">—</span>'
+    : `<span class="num">${comparar(actual, base)}</span>`;
+
+  const fila = (etiqueta, campo) => `
+    <span class="comparativa__etiqueta">${etiqueta}</span>
+    ${celda(c[campo], previa?.[campo])}
+    ${celda(c[campo], promedio?.[campo])}`;
+
+  const nota = !promedio
+    ? `Ninguna de las ${SEMANAS_PROMEDIO} semanas anteriores tuvo entregas.`
+    : promedio.semanas === promedio.miradas
+      ? `El promedio es de las últimas ${promedio.miradas} semanas.`
+      : `El promedio es de ${promedio.semanas === 1 ? 'la única semana' : `las ${promedio.semanas} semanas`}
+         con entregas de las últimas ${promedio.miradas}: las semanas paradas no cuentan.`;
+
+  return `
+    <div class="card comparativa" style="margin-top:var(--sp-4)">
+      <h3>Contra las semanas anteriores</h3>
+      <div class="comparativa__grilla">
+        <span></span>
+        <span class="comparativa__col">Semana anterior</span>
+        <span class="comparativa__col">Promedio ${SEMANAS_PROMEDIO} sem.</span>
+        ${fila('Ventas', 'ventas')}
+        ${fila('Margen bruto', 'margenBruto')}
+        ${fila('Ganancia neta', 'gananciaNeta')}
+      </div>
+      ${promedio ? `<p class="faint comparativa__nota">Promedio: ${ui.money(promedio.ventas)} de ventas
+        y ${ui.money(promedio.gananciaNeta)} de ganancia neta por semana.</p>` : ''}
+      <p class="faint comparativa__nota">${nota}</p>
+    </div>`;
 }
 
 /* ------------------------------------------------------------------ */
 /*  3 · Rentabilidad por producto                                      */
 /* ------------------------------------------------------------------ */
 
+const haceTreintaDias = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return ui.hoyISO(d);
+};
+
 async function pantallaRentabilidad(cont) {
-  const hasta = hoyISO();
+  rangoRent ||= { desde: haceTreintaDias(), hasta: hoyISO() };
+
+  let hasta = hoyISO();
   let desde = '0000-01-01';
   if (periodoRent === 'semana') {
     desde = fechasDeSemana(ui.inicioSemana())[0];
   } else if (periodoRent === 'mes') {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    desde = ui.hoyISO(d);
+    desde = haceTreintaDias();
+  } else if (periodoRent === 'rango') {
+    ({ desde, hasta } = rangoRent);
   }
 
-  const datos = await cierreDe(desde, hasta);
-  const filas = calc.cuadrantes(calc.rentabilidadProductos({
-    pedidos: datos.pedidos,
-    items: datos.items,
-    productos: state.productos,
-  }));
+  // Un rango al revés no se calcula: se avisa y se espera a que lo corrijan.
+  // Dejar la lista vacía en silencio se leería como "no se vendió nada".
+  const errorRango = periodoRent === 'rango' ? calc.errorRango(desde, hasta) : null;
+
+  let filas = [];
+  if (!errorRango) {
+    const datos = await cierreDe(desde, hasta);
+    filas = calc.cuadrantes(calc.rentabilidadProductos({
+      pedidos: datos.pedidos,
+      items: datos.items,
+      productos: state.productos,
+    }));
+  }
 
   cont.innerHTML = `
     <div class="chips" style="margin-bottom:var(--sp-3)">
@@ -677,7 +800,20 @@ async function pantallaRentabilidad(cont) {
       `).join('')}
     </div>
 
-    ${filas.length ? `
+    ${periodoRent === 'rango' ? `
+      <div class="rango-fechas">
+        <div class="field">
+          <label for="r-desde">Desde</label>
+          <input class="input" id="r-desde" type="date" value="${ui.esc(rangoRent.desde)}" max="${hoyISO()}">
+        </div>
+        <div class="field">
+          <label for="r-hasta">Hasta</label>
+          <input class="input" id="r-hasta" type="date" value="${ui.esc(rangoRent.hasta)}" max="${hoyISO()}">
+        </div>
+      </div>
+      ${errorRango ? `<p class="faint" style="color:var(--danger)">${ui.esc(errorRango)}</p>` : ''}` : ''}
+
+    ${errorRango ? '' : filas.length ? `
       <div class="lista">
         ${filas.map((f) => {
           const q = CUADRANTES[f.cuadrante];
@@ -715,6 +851,15 @@ async function pantallaRentabilidad(cont) {
     periodoRent = b.dataset.periodo;
     pantallaRentabilidad(cont);
   });
+
+  // `change` y no `input`: el selector de fecha del celular puede disparar
+  // `input` a cada vuelta de la ruedita, y recalcular en cada una traba.
+  for (const [id, campo] of [['r-desde', 'desde'], ['r-hasta', 'hasta']]) {
+    cont.querySelector(`#${id}`)?.addEventListener('change', (e) => {
+      rangoRent = { ...rangoRent, [campo]: e.target.value };
+      pantallaRentabilidad(cont);
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ */

@@ -280,5 +280,61 @@ t('la comisión no anula: mira, no opera', !!err && !/ya está anulado/.test(err
 auth.rol = 'admin';
 
 /* ================================================================== */
+console.log('\n── el cierre contra el promedio de cuatro semanas');
+
+// Una semana armada con el mismo cierreSemanal() que usa la pantalla.
+const semana = (ventas, costo = 0, gastos = 0) => calc.cierreSemanal({
+  pedidos: ventas ? [{ id: 'x', estado: 'entregado', descuento: 0 }] : [],
+  items: ventas ? [{ pedido_id: 'x', cantidad: 1, precio_unitario: ventas, costo_unitario: costo }] : [],
+  gastos: gastos ? [{ tipo: 'egreso', monto: gastos }] : [],
+});
+
+const cuatroLlenas = calc.promedioSemanas([
+  semana(10000, 4000), semana(20000, 8000), semana(30000, 12000), semana(40000, 16000),
+]);
+t('con cuatro semanas con ventas promedia las cuatro',
+  cuatroLlenas.semanas === 4 && cerca(cuatroLlenas.ventas, 25000));
+t('y la ganancia también', cerca(cuatroLlenas.gananciaNeta, 15000));
+t('el % sale de los promedios, no del promedio de %', cerca(cuatroLlenas.margenBrutoPct, 60));
+
+const conParadas = calc.promedioSemanas([semana(20000), semana(0), semana(40000), semana(0)]);
+t('las semanas sin ventas NO arrastran el promedio a cero',
+  conParadas.semanas === 2 && cerca(conParadas.ventas, 30000));
+t('y dice cuántas entraron de cuántas se miraron', conParadas.miradas === 4);
+
+const paradaConGasto = calc.promedioSemanas([semana(10000), semana(0, 0, 5000)]);
+t('una semana parada con un gasto suelto tampoco cuenta',
+  paradaConGasto.semanas === 1 && cerca(paradaConGasto.gananciaNeta, 10000));
+
+t('sin ninguna semana con ventas no hay promedio',
+  calc.promedioSemanas([semana(0), semana(0), semana(0), semana(0)]) === null);
+t('ni con la lista vacía', calc.promedioSemanas([]) === null);
+
+t('la variación contra cero no se inventa', calc.variacionPct(5000, 0) === null);
+t('la variación contra una base normal', cerca(calc.variacionPct(15000, 10000), 50));
+t('salir de una pérdida se lee como mejora', calc.variacionPct(-5000, -10000) > 0);
+
+// Un gasto anulado no cuenta como gasto de la semana que entra al promedio
+const gastoYAnulacion = calc.cierreSemanal({
+  pedidos: [{ id: 'x', estado: 'entregado', descuento: 0 }],
+  items: [{ pedido_id: 'x', cantidad: 1, precio_unitario: 10000, costo_unitario: 0 }],
+  gastos: [{ tipo: 'egreso', monto: 85000 }, { tipo: 'ingreso', monto: 85000 }],
+});
+t('el par anulado no mueve la ganancia que entra al promedio',
+  cerca(calc.promedioSemanas([gastoYAnulacion]).gananciaNeta, 10000));
+
+t('el promedio es solo devengado: no trae cifras de caja',
+  !('ingresos' in cuatroLlenas) && !('neto' in cuatroLlenas));
+
+/* ================================================================== */
+console.log('\n── el rango de fechas de la rentabilidad');
+
+t('un rango normal pasa', calc.errorRango('2026-08-01', '2026-08-31') === null);
+t('un rango de un solo día pasa', calc.errorRango('2026-08-10', '2026-08-10') === null);
+t('desde después de hasta no pasa', !!calc.errorRango('2026-09-01', '2026-08-01'));
+t('sin una de las fechas no pasa', !!calc.errorRango('', '2026-08-01'));
+t('una fecha rota no pasa', !!calc.errorRango('01/08/2026', '2026-08-31'));
+
+/* ================================================================== */
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
 process.exit(mal ? 1 : 0);

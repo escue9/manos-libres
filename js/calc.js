@@ -262,6 +262,76 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
 }
 
 /**
+ * Variación porcentual de un valor contra una base. Devuelve null si no hay
+ * base: comparar contra cero da -100% o infinito, y un número inventado se lee
+ * igual que uno verdadero. Quien muestra decide qué decir en ese caso.
+ *
+ * Con base negativa (una semana en pérdida) se divide por el valor absoluto,
+ * para que pasar de −$10.000 a −$5.000 se lea como mejora y no como caída.
+ */
+export function variacionPct(actual, base) {
+  if (!base || !Number.isFinite(base)) return null;
+  return ((actual - base) / Math.abs(base)) * 100;
+}
+
+/**
+ * Promedio de varios cierres semanales, para comparar una semana contra las
+ * anteriores y no solo contra la de al lado. Recibe lo que devuelve
+ * cierreSemanal() —devengado— y nada de caja: la regla 5 vale también acá.
+ *
+ * CRITERIO: se promedian SOLO las semanas con ventas. La cocina para por
+ * semanas enteras (receso, falta de insumos, la habilitación), y una semana
+ * parada no es una semana mala: es una semana que no hubo. Si entrara al
+ * promedio, dos semanas paradas de cuatro lo partirían a la mitad y cualquier
+ * semana normal se vería como un +100%. Una semana parada con un gasto suelto
+ * —la garrafa, la luz— tampoco cuenta: sin ventas no es una semana operativa.
+ *
+ * Devuelve cuántas semanas entraron (`semanas`) de cuántas se miraron
+ * (`miradas`), para que la pantalla lo diga en vez de esconderlo. Sin ninguna
+ * semana con ventas devuelve null: no hay contra qué comparar.
+ *
+ * @param {Array} cierres  resultados de cierreSemanal(), uno por semana
+ */
+export function promedioSemanas(cierres = []) {
+  const conVentas = cierres.filter((c) => c && c.ventas > 0);
+  if (!conVentas.length) return null;
+
+  const n = conVentas.length;
+  const prom = (campo) => conVentas.reduce((a, c) => a + (c[campo] || 0), 0) / n;
+
+  const ventas = prom('ventas');
+  const margenBruto = prom('margenBruto');
+  const gananciaNeta = prom('gananciaNeta');
+
+  return {
+    semanas: n,
+    miradas: cierres.length,
+    ventas,
+    costoMercaderia: prom('costoMercaderia'),
+    margenBruto,
+    costoLaboral: prom('costoLaboral'),
+    gastosOperativos: prom('gastosOperativos'),
+    gananciaNeta,
+    // Los porcentajes salen de los promedios, no del promedio de porcentajes:
+    // una semana chica con 60% de margen no pesa lo mismo que una grande.
+    margenBrutoPct: ventas > 0 ? (margenBruto / ventas) * 100 : 0,
+    gananciaNetaPct: ventas > 0 ? (gananciaNeta / ventas) * 100 : 0,
+  };
+}
+
+/**
+ * Valida un rango de fechas elegido a mano. Devuelve el error en castellano, o
+ * null si está bien. Las fechas son 'YYYY-MM-DD', que se comparan como texto.
+ */
+export function errorRango(desde, hasta) {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!desde || !hasta) return 'Elegí las dos fechas';
+  if (!iso.test(desde) || !iso.test(hasta)) return 'Fecha inválida';
+  if (desde > hasta) return 'La fecha "desde" no puede ser posterior a "hasta"';
+  return null;
+}
+
+/**
  * Saldo de caja por PERCIBIDO: solo movimientos efectivos.
  * Nunca mezclar con cierreSemanal() — son dos números distintos y ambos correctos.
  */
