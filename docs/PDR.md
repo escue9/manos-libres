@@ -590,14 +590,14 @@ Cada fase deja el sistema **usable**. No hay una fase que exija esperar a la sig
 
 El sistema está listo cuando:
 
-- [ ] Se registra una compra de insumo y el costo de los productos afectados se actualiza solo
-- [ ] Se cierra una orden de producción: descuenta insumos, suma terminados, imputa mano de obra
-- [ ] Se carga un pedido, se entrega y queda cobrado, con stock y caja actualizados
-- [ ] Se marca la semana de jornadas y se liquida con un click
-- [ ] El cierre semanal muestra la ganancia neta sin ningún cálculo manual
-- [ ] Una trabajadora entra con su PIN y solo ve lo que le corresponde
+- [x] Se registra una compra de insumo y el costo de los productos afectados se actualiza solo — `registrarCompra()` → `recalcularCostos()`
+- [x] Se cierra una orden de producción: descuenta insumos, suma terminados, imputa mano de obra — `cerrarOrden()`
+- [x] Se carga un pedido, se entrega y queda cobrado, con stock y caja actualizados — `crearPedido()`, `entregarPedido()`, `registrarCobro()`
+- [x] Se marca la semana de jornadas y se liquida con un click — `marcarJornada()`, `liquidarSemana()`
+- [x] El cierre semanal muestra la ganancia neta sin ningún cálculo manual — `calc.cierreSemanal()`, pantalla Cierre de caja
+- [x] Una trabajadora entra con su PIN y solo ve lo que le corresponde — `test/privacidad.test.mjs`
 - [ ] La app funciona sin internet y los datos persisten al cerrarla
-- [ ] Se exporta el reporte de rendición de cuentas en PDF
+- [x] Se exporta el reporte de rendición de cuentas en PDF — `imprimirRendicion()` en `js/modules/caja.js`, vía imprimir → guardar como PDF
 
 ---
 

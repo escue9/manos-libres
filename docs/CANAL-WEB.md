@@ -192,9 +192,10 @@ formato coinciden con la tabla publicada.
       todo se probó contra un buzón simulado. `nube.conectar()` está listo
 - [ ] **El WhatsApp de la cocina** en `catalogo/config.js`. Sin él la página no
       muestra ningún botón de contacto, incluido el del camino de error
-- [ ] **El deploy.** El conector de Vercel no tiene permiso para crear
+- [x] **El deploy.** El conector de Vercel no tiene permiso para crear
       proyectos y `gh` no está instalado. La vía buena es conectar el repo por
       git: resuelve los binarios de `assets/` y deja deploy automático
+      — hecho en la Fase 5: https://manos-libres-app.vercel.app/catalogo/ (ver `docs/FASE-5.md`)
 - [ ] **Escanear el QR impreso una vez** antes de mandarlo a hacer en cantidad.
       Es lo único que no se puede verificar por código
 - [ ] Foto por producto en el catálogo — el campo `foto_url` está, falta subirlas
