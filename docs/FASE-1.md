@@ -471,3 +471,28 @@ const semana = /* pegar acá el contenido de cargas/2026-10-06_semana.json */;
 await ml.produccion.cargarSemana(semana, { soloValidar: true });   // primero, sin escribir
 await ml.produccion.cargarSemana(semana);
 ```
+
+---
+
+## Addendum — arrancar la base real de cero
+
+**Un dispositivo real ya no se llena con datos de ejemplo.** `init()` corría
+`seed()` en cualquier lado, también en https://manos-libres-app.vercel.app: un
+celular nuevo nacía con Ana, María, precios y stocks inventados, y la primera
+sincronización los subía a la nube mezclados con lo real. Ahora `seed()` corre
+solo en desarrollo (localhost o `.test`) y en producción corre
+`puestaEnMarcha()`, que crea la unidad de negocio y nada más.
+
+**La unidad de negocio tiene id fijo** (`UNIDAD_ID` en `db.js`). Cada aparato la
+crea antes de tener sesión; con un id al azar, cada celular subía la suya y la
+nube terminaba con una cocina por aparato. Con el mismo id el upsert del sync
+las junta en una fila.
+
+**`cargarSemana` suma `trabajadoras_nuevas: [{ nombre, telefono? }]`**, primera
+sección después del reinicio. En una base vacía no hay quién haya producido, y
+sin eso la semana no entraba en una sola carga. Pide `liquidar`.
+
+La semana del 06/10 para una base vacía es `cargas/2026-10-06_arranque.json`
+(fuera del repo): la misma semana, más Rocío, los seis insumos y los dos
+productos que antes ponía el ejemplo, sin `reinicio` ni `precios`. Da los mismos
+números que contra `seed()`, y lo prueba `test/carga-semana.test.mjs`.

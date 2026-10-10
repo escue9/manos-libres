@@ -25,12 +25,13 @@ nombre correcto: no "Protección Ciudadana" a secas).
 
 ## Estado real de la operación (agosto 2026)
 
-**La cocina NO está produciendo.** Hubo unos meses de actividad con **dos mujeres**, ambas con
-sus parejas privadas de la libertad; hoy no hay ninguna trabajadora ni trabajador en actividad.
+**Octubre de 2026: la cocina arranca con Rocío.** La semana del 06/10 es la primera de la
+operación real. Antes hubo unos meses de actividad con **dos mujeres**, ambas con sus parejas
+privadas de la libertad, y después un receso sin nadie trabajando.
 
 El proyecto es joven: no hay años de historia ni volumen acumulado. **No escribas textos que
-sugieran una trayectoria larga, ventas sostenidas o rentabilidad demostrada.** El sistema está
-terminado y esperando la reapertura, no en uso diario.
+sugieran una trayectoria larga, ventas sostenidas o rentabilidad demostrada.** Una semana de
+producción no es una trayectoria.
 
 Para reabrir faltan tres definiciones institucionales, ninguna técnica:
 

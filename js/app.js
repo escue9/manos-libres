@@ -2,7 +2,7 @@
  * app.js — arranque, gate de login y ruteo entre vistas.
  */
 
-import { db, seed } from './db.js';
+import { db, seed, puestaEnMarcha } from './db.js';
 import { state } from './state.js';
 import { auth } from './auth.js';
 import { ui } from './ui.js';
@@ -374,8 +374,15 @@ async function arrancarSesion() {
   await irA(auth.tabInicial);
 }
 
+/** Desarrollo: localhost o un .test. Ahí sí van los datos de ejemplo. */
+const enDesarrollo = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+  || location.hostname.endsWith('.localhost') || location.hostname.endsWith('.test');
+
 async function init() {
-  await seed();
+  // En un dispositivo real la base nace vacía: los datos de ejemplo de seed()
+  // subían a la nube con la primera sincronización, mezclados con los reales
+  if (enDesarrollo) await seed();
+  else await puestaEnMarcha();
   await state.cargar();
 
   document.getElementById('nav').addEventListener('click', (e) => {

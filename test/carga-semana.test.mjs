@@ -438,6 +438,28 @@ err = await tira(() => prod.cargarSemana({
 t('no se cobra más que el total', /superan el total/.test(err?.message));
 
 /* ================================================================== */
+console.log('\n── trabajadoras nuevas');
+
+const fotoT = await fotoTodo();
+err = await tira(() => prod.cargarSemana({ trabajadoras_nuevas: [{ nombre: 'ana' }] }));
+t('no duplica una trabajadora aunque cambien mayúsculas', /ya existe una trabajadora "ana"/.test(err?.message));
+t('y no escribió nada', igual(await fotoTodo(), fotoT));
+
+const rT = await prod.cargarSemana({
+  trabajadoras_nuevas: [{ nombre: 'Lucía de prueba' }],
+  pagos: [{ producto: 'Tarta de verdura', pago_produccion: 300 }],
+  producciones: [{ fecha: '2026-10-03', trabajadora: 'Lucía de prueba',
+    items: [{ producto: 'Tarta de verdura', cantidad: 1 }] }],
+});
+const lucia = (await db.from('trabajadora').select()).find((x) => x.nombre === 'Lucía de prueba');
+t('la crea y la producción de la misma carga la encuentra', rT.trabajadoras[0] === 'Lucía de prueba'
+  && (await db.from('pago_produccion').select()).some((p) => p.trabajadora_id === lucia?.id));
+auth.rol = 'trabajadora';
+err = await tira(() => prod.cargarSemana({ trabajadoras_nuevas: [{ nombre: 'Otra' }] }));
+t('la trabajadora no da de alta compañeras', /Sin permiso/.test(err?.message));
+auth.rol = 'admin';
+
+/* ================================================================== */
 console.log('\n── un error en productos_nuevos frena todo');
 
 const fotoE = await fotoTodo();
@@ -504,6 +526,52 @@ t('faltan 4 cajas', cerca(ajusteCajas?.cantidad ?? NaN, 4, 0.001));
     && (await db.from('cliente').select()).filter((c) => nombres.includes(c.nombre)).length === 4);
   const impago = r.ventas.pedidos.find((p) => p.cliente === deudor);
   t('y ese pedido queda entregado e impago', impago.estado === 'entregado' && impago.estadoPago === 'impago');
+}
+
+/* ================================================================== */
+console.log('\n── puesta en marcha: un dispositivo real nace vacío');
+
+{
+  const { puestaEnMarcha, UNIDAD_ID } = await import('../js/db.js');
+  await db.reset();
+  const un = await puestaEnMarcha();
+  t('crea solo la unidad de negocio', un.id === UNIDAD_ID
+    && (await contar('producto')) === 0 && (await contar('insumo')) === 0 && (await contar('trabajadora')) === 0);
+  await puestaEnMarcha();
+  t('si ya existe no la duplica', (await contar('unidad_negocio')) === 1);
+
+  // El mismo id en todos los aparatos: el sync junta la unidad en una sola fila
+  await db.reset();
+  await seed();
+  t('seed usa el mismo id de unidad', (await db.from('unidad_negocio').select())[0].id === UNIDAD_ID);
+}
+
+/* ================================================================== */
+console.log('\n── la semana de arranque sobre una base vacía');
+
+const arranque = await readFile(new URL('../cargas/2026-10-06_arranque.json', import.meta.url), 'utf8')
+  .then(JSON.parse).catch(() => null);
+if (!arranque) console.log('  ⚠ cargas/2026-10-06_arranque.json no está en esta compu: se saltea');
+else {
+  const { puestaEnMarcha } = await import('../js/db.js');
+  await db.reset();
+  await puestaEnMarcha();
+  await state.cargar();
+
+  const r = await prod.cargarSemana(arranque);
+  const caja = await db.from('movimiento_caja').select();
+  const trabajadoras = await db.from('trabajadora').select();
+  const rocio = trabajadoras.find((x) => x.nombre === 'Rocío');
+  const pagos = (await db.from('pago_produccion').select()).filter((p) => p.trabajadora_id === rocio?.id);
+
+  t('Rocío es la única trabajadora', trabajadoras.length === 1 && !!rocio);
+  t('egresos de compras $427.886', caja.filter((m) => m.origen === 'compra_insumo').reduce((a, m) => a + m.monto, 0) === 427886);
+  t('ventas $619.500 y cobrado $91.000', r.ventas.totalVendido === 619500 && r.ventas.totalCobrado === 91000);
+  t('la caja: solo compras y cobros, nada de ejemplo', caja.length === 19);
+  t('pago de Rocío $192.620', cerca(pagos.reduce((a, p) => a + p.total, 0), 192620));
+  t('producto terminado en 0', (await db.from('producto').select()).every((p) => cerca(p.stock_actual, 0, 1e-9)));
+  t('sin productos ni insumos de ejemplo', !(await db.from('insumo').select()).some((i) => ['Acelga', 'Aceite'].includes(i.nombre))
+    && !(await db.from('producto').select()).some((p) => /Tarta/.test(p.nombre)));
 }
 
 /* ================================================================== */

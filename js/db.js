@@ -531,7 +531,30 @@ export const db = {
 };
 
 /**
- * seed() — datos iniciales para desarrollo.
+ * El id de la unidad de negocio de la cocina. Fijo y no generado: cada
+ * dispositivo nuevo crea la unidad antes de tener sesión, y con un id al azar
+ * cada celular subía la suya y la nube terminaba con una cocina por aparato.
+ * Con el mismo id el sync las junta en una sola fila (upsert por id).
+ */
+export const UNIDAD_ID = '6d616e6f-736c-4962-a265-736369633031';
+
+const DATOS_UNIDAD = { id: UNIDAD_ID, nombre: 'Manos Libres', tipo: 'alimentos', activa: true };
+
+/**
+ * puestaEnMarcha() — lo mínimo para que la app abra en un dispositivo real:
+ * la unidad de negocio y nada más. Sin productos, insumos ni trabajadoras de
+ * ejemplo: esos los carga la administración (cargarSemana o las pantallas), y
+ * los de ejemplo, si llegaban a la nube, quedaban mezclados con los reales.
+ */
+export async function puestaEnMarcha() {
+  const existentes = await db.from('unidad_negocio').select();
+  if (existentes.length) return existentes[0];
+  return db.from('unidad_negocio').insert(DATOS_UNIDAD);
+}
+
+/**
+ * seed() — datos de ejemplo para desarrollo y tests. En producción no corre:
+ * ver init() en app.js.
  *
  * Los costos de los insumos son el punto cero: se corrigen solos con la primera
  * compra real, que recalcula el promedio ponderado. Las recetas NO se siembran
@@ -542,9 +565,7 @@ export async function seed() {
   const existentes = await db.from('unidad_negocio').select();
   if (existentes.length) return;
 
-  const un = await db.from('unidad_negocio').insert({
-    nombre: 'Manos Libres', tipo: 'alimentos', activa: true,
-  });
+  const un = await db.from('unidad_negocio').insert(DATOS_UNIDAD);
 
   await db.from('producto').insert([
     { unidad_negocio_id: un.id, nombre: 'Empanada de carne',      categoria: 'Empanadas', unidad_venta: 'unidad', precio_venta: 800,  costo_manual: 350,  stock_actual: 50, stock_minimo: 10, rinde_por_lote: 24, activo: true },

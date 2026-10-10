@@ -25,6 +25,7 @@ import {
   demandaPendiente, MEDIOS, CANALES, TIPOS_CLIENTE,
   guardarCliente, crearPedido, entregarPedido, registrarCobro,
 } from './pedidos.js';
+import { guardarTrabajadora } from './trabajadoras.js';
 
 const CATEGORIAS_INSUMO = ['Almacén', 'Carnicería', 'Verdulería', 'Lácteos', 'Packaging', 'Otros'];
 
@@ -1025,7 +1026,7 @@ export async function validarSemana(semana) {
   }
 
   const plan = {
-    reinicio: null, insumos_nuevos: [], productos_nuevos: [], precios: [], compras: [],
+    reinicio: null, trabajadoras_nuevas: [], insumos_nuevos: [], productos_nuevos: [], precios: [], compras: [],
     stock_inicial: [], recetas: [], pagos: [], producciones: [], ventas: [],
   };
 
@@ -1036,6 +1037,21 @@ export async function validarSemana(semana) {
     insumos.forEach((i) => { i.stock_actual = 0; });
     productosSim.forEach((p) => { p.stock_actual = 0; });
   }
+
+  /* --- trabajadoras nuevas --- */
+  // Para arrancar una base de cero en una sola carga: la producción necesita
+  // saber quién produjo, y en una base nueva no hay nadie todavía
+  (semana.trabajadoras_nuevas || []).forEach((n, k) => {
+    const donde = `trabajadoras_nuevas[${k}]`;
+    const nombre = n?.nombre?.trim();
+    if (!nombre) return errores.push(`${donde}: falta el nombre`);
+    if (trabajadoras.some((t) => clave(t.nombre) === clave(nombre))) {
+      return errores.push(`${donde}: ya existe una trabajadora "${nombre}"`);
+    }
+    const sim = { id: null, nombre };
+    trabajadoras.push(sim);
+    plan.trabajadoras_nuevas.push({ datos: { nombre, telefono: n.telefono || '' }, sim });
+  });
 
   /* --- insumos nuevos --- */
   (semana.insumos_nuevos || []).forEach((n, k) => {
@@ -1317,7 +1333,7 @@ export async function validarSemana(semana) {
 
 /**
  * Carga una semana de cocina de una sola vez, en este orden: reinicio de
- * stock, insumos nuevos, productos nuevos, precios, compras, stock inicial,
+ * stock, trabajadoras nuevas, insumos nuevos, productos nuevos, precios, compras, stock inicial,
  * recetas, pagos, producciones y ventas. Es la puerta para cargar desde la
  * consola o desde otra sesión, sin pasar por las pantallas.
  *
@@ -1332,6 +1348,7 @@ export async function validarSemana(semana) {
  *
  *   {
  *     reinicio:       { motivo },
+ *     trabajadoras_nuevas: [{ nombre, telefono? }],
  *     insumos_nuevos:   [{ nombre, categoria, unidad_medida, stock_minimo }],
  *     productos_nuevos: [{ nombre, categoria, unidad_venta, precio_venta, stock_minimo }],
  *     precios:          [{ producto, precio_venta }],
@@ -1358,7 +1375,9 @@ export async function validarSemana(semana) {
 export async function cargarSemana(semana, { soloValidar = false } = {}) {
   auth.exigir('gestionarInsumos');
   // Fijar pagos y cerrar órdenes a nombre de otras es de la administración
-  if (semana?.pagos?.length || semana?.producciones?.length) auth.exigir('liquidar');
+  if (semana?.pagos?.length || semana?.producciones?.length || semana?.trabajadoras_nuevas?.length) {
+    auth.exigir('liquidar');
+  }
   // El precio es lo que paga el público: lo cambia quien puede cambiar precios
   if (semana?.productos_nuevos?.length || semana?.precios?.length) auth.exigir('editarPrecios');
   if (semana?.ventas?.length) { auth.exigir('cargarPedidos'); auth.exigir('gestionarClientes'); }
@@ -1368,11 +1387,17 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
   if (soloValidar) return { plan };
 
   const resumen = {
-    reinicio: null, insumos: [], productos: [], precios: [], compras: [], stockInicial: [], recetas: [],
+    reinicio: null, trabajadoras: [], insumos: [], productos: [], precios: [], compras: [], stockInicial: [], recetas: [],
     pagos: [], ordenes: [], ventas: null, alertas: [], egresos: [], stock: null,
   };
 
   if (plan.reinicio) resumen.reinicio = await reiniciarStock(plan.reinicio.motivo);
+
+  for (const n of plan.trabajadoras_nuevas) {
+    const creada = await guardarTrabajadora(n.datos);
+    n.sim.id = creada.id;     // las producciones del plan apuntan a este objeto
+    resumen.trabajadoras.push(creada.nombre);
+  }
 
   // Los insumos nuevos de la simulación no tenían id: se lo pone el alta
   for (const n of plan.insumos_nuevos) {
