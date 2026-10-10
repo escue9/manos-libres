@@ -411,3 +411,30 @@ real, y el catálogo público tiene dónde vivir para generar el QR. Esa
 verificación —instalar y probar en modo avión desde un celular— sigue
 pendiente y son los checkboxes abiertos en `docs/FASE-0.md` y
 `docs/BRIEF-CODE.md`.
+
+---
+
+## Addendum — la primera subida real (10/10/2026)
+
+La nube recibió datos por primera vez con la semana de arranque de Rocío, y el
+replicador falló en dos lugares que los tests no veían porque el Postgres de
+mentira era más permisivo que el de verdad:
+
+1. **El upsert no pasa en las cinco tablas con costos ocultos** (insumo,
+   producto, pedido_item, produccion_item, orden_produccion). Postgres pide
+   permiso de lectura sobre cada columna que actualiza un `on conflict do
+   update`, y `20260806_costos_ocultos.sql` le sacó la lectura de los costos a
+   todo `authenticated`, administración incluida. Para esas tablas el sync
+   ahora pregunta qué ids existen, inserta los nuevos y actualiza los demás
+   por id (`empujarConCostoOculto`).
+2. **PostgREST rechaza envíos con filas de columnas distintas** (PGRST102). El
+   movimiento de stock de una compra no trae `motivo` y el de un ajuste sí. Va
+   un envío por cada forma de fila (`porForma`).
+
+El Postgres de mentira de `test/sync.test.mjs` ahora devuelve 409 a un insert
+repetido y PGRST102 a un envío mezclado, para que esto no vuelva a pasar en
+silencio.
+
+Quedó verificado contra Supabase: 18 insumos, 6 productos con costo, 28 líneas
+de receta, $427.886 de compras, $619.500 vendidos, $91.000 cobrados y $192.620
+para Rocío.
