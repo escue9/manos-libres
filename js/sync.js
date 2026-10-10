@@ -134,15 +134,53 @@ async function empujarTabla(tabla) {
   if (!pendientes.length) return 0;
 
   for (const tanda of enTandas(pendientes)) {
-    await sesion.pedir(`${tabla}?on_conflict=id`, {
-      metodo: 'POST',
-      cuerpo: tanda.map(paraServidor),
-      prefer: 'resolution=merge-duplicates,return=minimal',
-    });
+    if (VISTA[tabla]) await empujarConCostoOculto(tabla, tanda);
+    else {
+      await sesion.pedir(`${tabla}?on_conflict=id`, {
+        metodo: 'POST',
+        cuerpo: tanda.map(paraServidor),
+        prefer: 'resolution=merge-duplicates,return=minimal',
+      });
+    }
     await db._sync.marcarSincronizadas(tabla, tanda.map((f) => f.id));
   }
 
   return pendientes.length;
+}
+
+/**
+ * Las cinco tablas con costos ocultos no aceptan el upsert, ni de la
+ * administración. Postgres pide permiso de LECTURA sobre cada columna que
+ * actualiza un `on conflict do update`, y 20260806_costos_ocultos.sql le sacó
+ * la lectura de las columnas de costo a todo `authenticated`. Un insert a secas
+ * y un update por id sí pasan: piden escribir, no leer.
+ *
+ * Así que se hace a mano lo que hacía el upsert: se pregunta qué ids ya están
+ * (el id sí se lee), se insertan los nuevos de una vez y se actualizan los que
+ * ya existían, de a uno. Sigue siendo idempotente: mandar dos veces la misma
+ * tanda la segunda vez solo actualiza.
+ *
+ * Se descubrió el 10/10/2026, la primera vez que la nube recibió datos reales:
+ * hasta ahí nadie había subido un insumo.
+ */
+async function empujarConCostoOculto(tabla, tanda) {
+  const ids = tanda.map((f) => `"${f.id}"`).join(',');
+  const ya = new Set(((await sesion.pedir(`${tabla}?select=id&id=in.(${ids})`)) || []).map((f) => f.id));
+
+  const nuevas = tanda.filter((f) => !ya.has(f.id));
+  const existentes = tanda.filter((f) => ya.has(f.id));
+
+  if (nuevas.length) {
+    await sesion.pedir(tabla, {
+      metodo: 'POST', cuerpo: nuevas.map(paraServidor), prefer: 'return=minimal',
+    });
+  }
+  for (const f of existentes) {
+    const { id, ...resto } = paraServidor(f);
+    await sesion.pedir(`${tabla}?id=eq.${id}`, {
+      metodo: 'PATCH', cuerpo: resto, prefer: 'return=minimal',
+    });
+  }
 }
 
 /**

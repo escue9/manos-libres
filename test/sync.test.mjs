@@ -59,8 +59,26 @@ globalThis.fetch = async (url, opciones = {}) => {
   const filas = filasDe(tabla);
 
   if (metodo === 'POST') {
-    for (const f of (Array.isArray(cuerpo) ? cuerpo : [cuerpo])) filas.set(f.id, f);
+    const lote = Array.isArray(cuerpo) ? cuerpo : [cuerpo];
+    // Sin on_conflict es un insert a secas: un id repetido es un 409, como en Postgres
+    if (!u.includes('on_conflict=') && lote.some((f) => filas.has(f.id))) {
+      return new Response('duplicate key value violates unique constraint', { status: 409 });
+    }
+    for (const f of lote) filas.set(f.id, f);
     return new Response(null, { status: 204 });
+  }
+
+  if (metodo === 'PATCH') {
+    const id = decodeURIComponent((u.match(/id=eq\.([^&]+)/) || [])[1] || '');
+    if (filas.has(id)) filas.set(id, { ...filas.get(id), ...cuerpo });
+    return new Response(null, { status: 204 });
+  }
+
+  // Qué ids ya están: lo que pregunta el sync antes de subir una tabla con costos ocultos
+  if (u.includes('select=id&id=in.(')) {
+    const ids = decodeURIComponent((u.match(/id=in\.\(([^)]*)\)/) || [])[1] || '').split(',').map((x) => x.replace(/"/g, ''));
+    return new Response(JSON.stringify(ids.filter((id) => filas.has(id)).map((id) => ({ id }))),
+      { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
   if (metodo === 'DELETE') {
@@ -206,6 +224,42 @@ console.log('\n── sin sesión no sincroniza');
 await nube.desconectar();
 const err = await tira(() => sync.sincronizar());
 t('avisa en vez de romper', /no tiene sesión/.test(err?.message || ''));
+
+/* ================================================================== */
+console.log('\n── las tablas con costos ocultos no usan upsert');
+
+// Postgres pide LEER cada columna que actualiza un `on conflict do update`, y
+// la lectura de los costos está revocada para todos: el upsert daba 42501
+await nube.conectar({
+  url: 'https://prueba.supabase.co', anonKey: 'anon',
+  email: 'cocina@test', password: 'x',
+});
+const insumoViejo = (await db.from('insumo').select())[0];
+await db.from('insumo').update({ costo_unitario: 1234, stock_actual: 7 }).eq('id', insumoViejo.id);
+const insumoNuevo = await db.from('insumo').insert({
+  unidad_negocio_id: insumoViejo.unidad_negocio_id, nombre: 'Insumo de sync', unidad_medida: 'kg',
+  costo_unitario: 10, stock_actual: 1, stock_minimo: 0, activo: true,
+});
+await db.from('cliente').insert({ nombre: 'Cliente de sync', tipo: 'particular' });
+
+limpiar();
+await sync.sincronizar({ traer: false });
+
+const postsInsumo = pedidosA('insumo', 'POST');
+t('ningún upsert sobre insumo', postsInsumo.every((l) => !l.url.includes('on_conflict')));
+t('el insumo nuevo entra con un insert a secas', postsInsumo.length === 1
+  && postsInsumo[0].cuerpo.length === 1 && postsInsumo[0].cuerpo[0].id === insumoNuevo.id);
+t('el que ya existía se actualiza por id', pedidosA('insumo', 'PATCH').length === 1
+  && pedidosA('insumo', 'PATCH')[0].url.includes(`id=eq.${insumoViejo.id}`));
+t('y el servidor quedó con el cambio', filasDe('insumo').get(insumoViejo.id)?.stock_actual === 7
+  && filasDe('insumo').get(insumoViejo.id)?.costo_unitario === 1234);
+t('una tabla sin costos sigue con upsert', pedidosA('cliente', 'POST').every((l) => l.url.includes('on_conflict=id')));
+
+limpiar();
+await db.from('insumo').update({ stock_actual: 8 }).eq('id', insumoNuevo.id);
+await sync.sincronizar({ traer: false });
+t('mandar de nuevo no duplica: la segunda vez es un update', pedidosA('insumo', 'POST').length === 0
+  && pedidosA('insumo', 'PATCH').length === 1);
 
 /* ================================================================== */
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
