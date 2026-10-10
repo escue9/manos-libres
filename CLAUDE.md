@@ -23,7 +23,7 @@ El **Ministerio de Justicia de la Provincia ya está dentro del proyecto** — n
 La única que se invita a sumarse es la **Secretaría de Protección Ciudadana** (ese es el
 nombre correcto: no "Protección Ciudadana" a secas).
 
-## Estado real de la operación (agosto 2026)
+## Estado real de la operación (octubre 2026)
 
 **Octubre de 2026: la cocina arranca con Rocío.** La semana del 06/10 es la primera de la
 operación real. Antes hubo unos meses de actividad con **dos mujeres**, ambas con sus parejas
@@ -33,7 +33,7 @@ El proyecto es joven: no hay años de historia ni volumen acumulado. **No escrib
 sugieran una trayectoria larga, ventas sostenidas o rentabilidad demostrada.** Una semana de
 producción no es una trayectoria.
 
-Para reabrir faltan tres definiciones institucionales, ninguna técnica:
+Siguen abiertas tres definiciones institucionales, ninguna técnica:
 
 1. **Habilitación del espacio de producción** — bromatológica, depende del Municipio.
    **El trámite ya está iniciado**: hubo una primera visita, se ejecutaron los trabajos que
@@ -41,9 +41,9 @@ Para reabrir faltan tres definiciones institucionales, ninguna técnica:
    dar de alta a una trabajadora en un puesto que no existe formalmente.
 2. **Cuenta bancaria propia y movimientos comerciales formales** — trazabilidad y cobro digital.
 3. **Formalización del vínculo laboral** — monotributo social, cooperativa o esquema mixto
-   por etapas. **La relación de dependencia está descartada, no la propongas.** Como hoy no
-   hay nadie trabajando, no hay que regularizar nada heredado: se arranca bien desde la
-   primera incorporación.
+   por etapas. **La relación de dependencia está descartada, no la propongas.** Rocío es la
+   primera incorporación de esta etapa: no hay nada heredado que regularizar, pero su
+   vínculo es el primero que hay que encuadrar.
 
 **El documento de referencia es `docs/PDR.md`. Leelo antes de escribir código.**
 Contiene el modelo de datos completo, los flujos de cada módulo, las fórmulas de costeo y el roadmap por fases.
