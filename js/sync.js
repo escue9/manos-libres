@@ -107,6 +107,22 @@ const paraServidor = (fila) => {
   return limpia;
 };
 
+/**
+ * Agrupa las filas por las columnas que traen. PostgREST rechaza un envío de
+ * varias filas si no tienen todas las mismas claves (PGRST102), y en IndexedDB
+ * no las tienen: el movimiento de una compra no lleva `motivo` y el de un ajuste
+ * sí. Completar con null no sirve: en un upsert pisaría el valor del servidor.
+ */
+const porForma = (filas) => {
+  const grupos = new Map();
+  for (const f of filas) {
+    const forma = Object.keys(f).sort().join(',');
+    if (!grupos.has(forma)) grupos.set(forma, []);
+    grupos.get(forma).push(f);
+  }
+  return [...grupos.values()];
+};
+
 /** De a tandas: veinte pedidos no son veinte requests desde una conexión mala. */
 const TANDA = 200;
 
@@ -136,11 +152,13 @@ async function empujarTabla(tabla) {
   for (const tanda of enTandas(pendientes)) {
     if (VISTA[tabla]) await empujarConCostoOculto(tabla, tanda);
     else {
-      await sesion.pedir(`${tabla}?on_conflict=id`, {
-        metodo: 'POST',
-        cuerpo: tanda.map(paraServidor),
-        prefer: 'resolution=merge-duplicates,return=minimal',
-      });
+      for (const grupo of porForma(tanda.map(paraServidor))) {
+        await sesion.pedir(`${tabla}?on_conflict=id`, {
+          metodo: 'POST',
+          cuerpo: grupo,
+          prefer: 'resolution=merge-duplicates,return=minimal',
+        });
+      }
     }
     await db._sync.marcarSincronizadas(tabla, tanda.map((f) => f.id));
   }
@@ -170,10 +188,8 @@ async function empujarConCostoOculto(tabla, tanda) {
   const nuevas = tanda.filter((f) => !ya.has(f.id));
   const existentes = tanda.filter((f) => ya.has(f.id));
 
-  if (nuevas.length) {
-    await sesion.pedir(tabla, {
-      metodo: 'POST', cuerpo: nuevas.map(paraServidor), prefer: 'return=minimal',
-    });
+  for (const grupo of porForma(nuevas.map(paraServidor))) {
+    await sesion.pedir(tabla, { metodo: 'POST', cuerpo: grupo, prefer: 'return=minimal' });
   }
   for (const f of existentes) {
     const { id, ...resto } = paraServidor(f);

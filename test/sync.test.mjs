@@ -60,6 +60,10 @@ globalThis.fetch = async (url, opciones = {}) => {
 
   if (metodo === 'POST') {
     const lote = Array.isArray(cuerpo) ? cuerpo : [cuerpo];
+    // PGRST102: en un envío de varias filas todas tienen que traer las mismas claves
+    if (new Set(lote.map((f) => Object.keys(f).sort().join(','))).size > 1) {
+      return new Response('{"code":"PGRST102","message":"All object keys must match"}', { status: 400 });
+    }
     // Sin on_conflict es un insert a secas: un id repetido es un 409, como en Postgres
     if (!u.includes('on_conflict=') && lote.some((f) => filas.has(f.id))) {
       return new Response('duplicate key value violates unique constraint', { status: 409 });
@@ -260,6 +264,17 @@ await db.from('insumo').update({ stock_actual: 8 }).eq('id', insumoNuevo.id);
 await sync.sincronizar({ traer: false });
 t('mandar de nuevo no duplica: la segunda vez es un update', pedidosA('insumo', 'POST').length === 0
   && pedidosA('insumo', 'PATCH').length === 1);
+
+/* ================================================================== */
+console.log('\n── filas de la misma tabla con columnas distintas');
+
+// El movimiento de una compra no trae `motivo` y el de un ajuste sí
+await db.from('movimiento_stock_insumo').insert({ insumo_id: insumoViejo.id, fecha: '2026-10-10T10:00:00', tipo: 'compra', cantidad: 1 });
+await db.from('movimiento_stock_insumo').insert({ insumo_id: insumoViejo.id, fecha: '2026-10-10T10:01:00', tipo: 'ajuste', cantidad: -1, motivo: 'Conteo' });
+limpiar();
+const errForma = await tira(() => sync.sincronizar({ traer: false }));
+t('suben sin el 400 de claves distintas', !errForma);
+t('en un envío por cada forma de fila', pedidosA('movimiento_stock_insumo', 'POST').length === 2);
 
 /* ================================================================== */
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
