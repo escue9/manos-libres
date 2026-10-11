@@ -110,15 +110,16 @@ function fechasDeSemana(lunes) {
   });
 }
 
-/** Las cuatro tablas que mira un cierre, leídas una sola vez. */
+/** Las tablas que mira un cierre, leídas una sola vez. */
 async function leerTablasCierre() {
-  const [pedidos, items, jornadas, movimientos] = await Promise.all([
+  const [pedidos, items, jornadas, movimientos, pagos] = await Promise.all([
     db.from('pedido').select(),
     db.from('pedido_item').select(),
     db.from('jornada').select(),
     db.from('movimiento_caja').select(),
+    db.from('pago_produccion').select(),
   ]);
-  return { pedidos, items, jornadas, movimientos };
+  return { pedidos, items, jornadas, movimientos, pagos };
 }
 
 /**
@@ -129,7 +130,7 @@ async function leerTablasCierre() {
  * (la actual y las cuatro de antes) y leer la base cinco veces no tiene sentido.
  */
 async function cierreDe(desde, hasta, tablas = null) {
-  const { pedidos, items, jornadas, movimientos } = tablas || await leerTablasCierre();
+  const { pedidos, items, jornadas, movimientos, pagos } = tablas || await leerTablasCierre();
 
   // Devengado: lo entregado en el rango, sin importar si se cobró.
   const entregados = pedidos.filter(
@@ -144,6 +145,7 @@ async function cierreDe(desde, hasta, tablas = null) {
     items: items.filter((i) => idsEntregados.has(i.pedido_id)),
     jornadas: jornadas.filter((j) => enRango(j.fecha, desde, hasta)),
     gastos: delRango.filter((m) => m.origen === 'gasto_operativo'),
+    pagos,
   });
 
   // Percibido: lo que efectivamente entró y salió de la caja en el rango. Un
@@ -646,9 +648,10 @@ async function pantallaCierre(cont, vista) {
 
     <div class="card" style="margin-top:var(--sp-4)">
       ${linea('Ventas', c.ventas)}
-      ${linea('− Costo de mercadería', c.costoMercaderia)}
+      ${linea('− Insumos', c.costoInsumos)}
+      ${linea('− Pago por producción', c.pagoProduccion)}
       ${linea('= Margen bruto', c.margenBruto, ui.pct(c.margenBrutoPct), true)}
-      ${linea('− Costo laboral', c.costoLaboral)}
+      ${c.costoLaboral ? linea('− Jornadas pagadas por día', c.costoLaboral) : ''}
       ${linea('− Gastos operativos', c.gastosOperativos)}
       ${linea('= Ganancia neta', c.gananciaNeta, ui.pct(c.gananciaNetaPct), true)}
     </div>
@@ -959,8 +962,9 @@ function imprimirRendicion(desde, hasta, datos) {
       cobrado: un pedido entregado e impago suma acá y no a la caja.</p>
     <table>
       ${fila('Ventas', datos.devengado.ventas)}
-      ${fila('Costo de mercadería', -datos.devengado.costoMercaderia)}
-      ${fila('Costo laboral', -datos.devengado.costoLaboral)}
+      ${fila('Insumos', -datos.devengado.costoInsumos)}
+      ${fila('Pago por producción', -datos.devengado.pagoProduccion)}
+      ${datos.devengado.costoLaboral ? fila('Jornadas pagadas por día', -datos.devengado.costoLaboral) : ''}
       ${fila('Gastos operativos', -datos.devengado.gastosOperativos)}
       <tr class="total"><td>Ganancia neta</td><td class="n">${ui.money(datos.devengado.gananciaNeta)}</td></tr>
     </table>`);

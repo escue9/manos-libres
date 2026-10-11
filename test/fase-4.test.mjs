@@ -336,5 +336,46 @@ t('sin una de las fechas no pasa', !!calc.errorRango('', '2026-08-01'));
 t('una fecha rota no pasa', !!calc.errorRango('01/08/2026', '2026-08-31'));
 
 /* ================================================================== */
+console.log('\n── el costo de mercadería partido en insumos y pago por producción');
+
+// Lo de la primera semana real: el snapshot trae insumos + pago juntos
+const pagosProd = [
+  { producto_id: 'carne', fecha: '2026-10-09', pago_unitario: 380 },
+  { producto_id: 'pizza', fecha: '2026-10-09', pago_unitario: 2800 },
+  { producto_id: 'carne', fecha: '2026-10-20', pago_unitario: 450 },   // aumento posterior
+];
+const partido = calc.cierreSemanal({
+  pedidos: [
+    { id: 'p1', estado: 'entregado', fecha_entrega: '2026-10-09' },
+    { id: 'p2', estado: 'entregado', fecha_entrega: '2026-10-08' },   // antes de producir: toma la primera
+  ],
+  items: [
+    { pedido_id: 'p1', producto_id: 'carne', cantidad: 10, precio_unitario: 1500, costo_unitario: 1100 },
+    { pedido_id: 'p2', producto_id: 'pizza', cantidad: 2, precio_unitario: 7000, costo_unitario: 5000 },
+  ],
+  pagos: pagosProd,
+});
+t('el pago sale de lo congelado en pago_produccion, no del aumento posterior',
+  partido.pagoProduccion === 10 * 380 + 2 * 2800);
+t('los insumos son el resto del snapshot',
+  partido.costoInsumos === 10 * (1100 - 380) + 2 * (5000 - 2800));
+t('insumos + pago = costo de mercadería: el margen no se mueve',
+  partido.costoInsumos + partido.pagoProduccion === partido.costoMercaderia
+  && partido.margenBruto === 15000 + 14000 - 11000 - 10000);
+
+t('con el aumento, la venta posterior paga el pago nuevo',
+  calc.pagoVigente(pagosProd, 'carne', '2026-10-25') === 450);
+t('un producto que nunca se pagó por producción va todo a insumos',
+  calc.pagoVigente(pagosProd, 'tarta', '2026-10-09') === 0);
+
+const sinPagos = calc.cierreSemanal({
+  pedidos: [{ id: 'p1', estado: 'entregado', fecha_entrega: '2026-10-09' }],
+  items: [{ pedido_id: 'p1', producto_id: 'carne', cantidad: 1, precio_unitario: 1500, costo_unitario: 300 }],
+  pagos: [{ producto_id: 'carne', fecha: '2026-10-09', pago_unitario: 380 }],
+});
+t('el pago nunca es más que el snapshot: los insumos no quedan negativos',
+  sinPagos.pagoProduccion === 300 && sinPagos.costoInsumos === 0);
+
+/* ================================================================== */
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
 process.exit(mal ? 1 : 0);

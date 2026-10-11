@@ -220,6 +220,30 @@ export function tarifaVigente(tarifas = [], fecha, fallback = 0) {
   return vigente ? vigente.tarifa_dia : ordenadas[ordenadas.length - 1].tarifa_dia;
 }
 
+/**
+ * Cuánto se pagaba por producir una unidad de un producto a una fecha.
+ *
+ * Sale de pago_produccion, que congela el pago_unitario de cada producción
+ * (regla 4), y no de producto.pago_produccion, que es el de hoy. Se toma la
+ * producción más reciente hasta esa fecha; si el producto se vendió antes de
+ * que se registrara su producción —pasa: la carga de la semana se cierra el
+ * viernes y el pedido salió el jueves—, la primera.
+ *
+ * @param {Array}  pagos      pago_produccion
+ * @param {string} productoId
+ * @param {string} fecha      ISO 'YYYY-MM-DD'
+ */
+export function pagoVigente(pagos = [], productoId, fecha) {
+  if (!pagos.length || !fecha) return 0;
+
+  const suyos = pagos.filter((p) => p.producto_id === productoId)
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+  if (!suyos.length) return 0;
+
+  const hasta = suyos.filter((p) => p.fecha <= fecha);
+  return (hasta.length ? hasta[hasta.length - 1] : suyos[0]).pago_unitario || 0;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Cierre semanal                                                     */
 /* ------------------------------------------------------------------ */
@@ -235,8 +259,15 @@ export function tarifaVigente(tarifas = [], fecha, fallback = 0) {
  * @param {Array}  datos.gastos     movimiento_caja con origen 'gasto_operativo'.
  *                                  Un gasto anulado deja su contramovimiento
  *                                  como ingreso, que acá resta.
+ * @param {Array}  datos.pagos      pago_produccion, para partir el costo de
+ *                                  mercadería en insumos y pago por producción
+ *
+ * El costo congelado de cada venta trae juntos los materiales y lo que se le
+ * paga a quien lo produjo (calc.costoEfectivo). Para mostrarlos por separado,
+ * la parte del pago se toma de pagoVigente() y los insumos son el resto: la
+ * suma es siempre el snapshot, así que el margen no se mueve.
  */
-export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos = [] }) {
+export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos = [], pagos = [] }) {
   const idsEntregados = new Set(pedidos.filter((p) => p.estado === 'entregado').map((p) => p.id));
   const itemsVendidos = items.filter((i) => idsEntregados.has(i.pedido_id));
 
@@ -247,6 +278,13 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
 
   const ventas = bruto - descuentos;
   const costoMercaderia = itemsVendidos.reduce((a, i) => a + i.cantidad * i.costo_unitario, 0);
+
+  const fechaDe = new Map(pedidos.map((p) => [p.id, p.fecha_entrega || p.fecha_pedido]));
+  const pagoProduccion = itemsVendidos.reduce((a, i) => {
+    const pago = Math.min(pagoVigente(pagos, i.producto_id, fechaDe.get(i.pedido_id)), i.costo_unitario || 0);
+    return a + i.cantidad * Math.max(pago, 0);
+  }, 0);
+  const costoInsumos = costoMercaderia - pagoProduccion;
 
   // Solo las jornadas confirmadas entran al costo laboral (PDR §3, tabla jornada)
   const costoLaboral = jornadas
@@ -262,6 +300,8 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
   return {
     ventas,
     costoMercaderia,
+    costoInsumos,
+    pagoProduccion,
     margenBruto,
     margenBrutoPct: ventas > 0 ? (margenBruto / ventas) * 100 : 0,
     costoLaboral,
