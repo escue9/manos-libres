@@ -195,6 +195,46 @@ export async function requerimientos(planificado) {
     .sort((a, b) => b.falta - a.falta || a.insumo.nombre.localeCompare(b.insumo.nombre));
 }
 
+/**
+ * La lista de compras: los insumos que faltan para cumplir los pedidos abiertos.
+ *
+ * Se calcula, no se guarda. Sale de lo que falta producir (pedido menos
+ * producto terminado), pasado por las recetas, contra el stock de insumos.
+ * Cargar, entregar o anular un pedido la cambia sola, y una lista guardada
+ * quedaría vieja en cuanto alguien registra la compra.
+ *
+ * `sinReceta` son los productos que faltan y no tienen receta: de esos no se
+ * puede saber qué comprar, y es mejor decirlo que dejarlos afuera callados.
+ */
+export async function listaDeCompras() {
+  const faltan = (await demandaPendiente()).filter((d) => d.falta > 0);
+  if (!faltan.length) return { items: [], productos: [], sinReceta: [] };
+
+  const recetas = await db.from('receta_item').select();
+  const conReceta = new Set(recetas.map((r) => r.producto_id));
+
+  const reqs = await requerimientos(faltan.map((d) => ({ producto_id: d.producto_id, cantidad: d.falta })));
+
+  return {
+    items: reqs.filter((r) => r.falta > 1e-9).map((r) => ({
+      insumo: r.insumo,
+      comprar: r.falta,
+      requerido: r.requerido,
+      disponible: r.disponible,
+      costo: r.falta * (r.insumo.costo_unitario || 0),
+    })),
+    productos: faltan.map((d) => ({ producto: d.producto, falta: d.falta })),
+    sinReceta: faltan.filter((d) => !conReceta.has(d.producto_id)).map((d) => d.producto),
+  };
+}
+
+/** La lista en texto, para mandar por WhatsApp a quien sale a comprar. */
+export function textoListaDeCompras({ items }) {
+  return ['Lista de compras · Manos Libres', '',
+    ...items.map((i) => `• ${i.insumo.nombre}: ${ui.cantidad(i.comprar, i.insumo.unidad_medida)}`),
+  ].join('\n');
+}
+
 /** Crea la orden con sus productos planificados. Nace en 'planificada'. */
 export async function crearOrden({ fecha = hoyISO(), items = [], notas = '' }) {
   auth.exigir('cargarProduccion');
@@ -1532,6 +1572,11 @@ const SUBVISTAS = [
 /** Se recuerda entre renders: volver de un modal no te saca de la pestaña. */
 let subvista = 'stock';
 
+/** Para llegar a Compras desde otro módulo: el aviso de un pedido sin stock. */
+export function mostrarCompras() {
+  subvista = 'compras';
+}
+
 const verCostos = () => auth.puede('verCostos');
 const gestiona = () => auth.puede('gestionarInsumos');
 
@@ -1851,8 +1896,11 @@ async function pantallaCompras(cont) {
   const compras = (await db.from('compra_insumo').select().gte('fecha', desde).lte('fecha', hasta))
     .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.created_at).localeCompare(String(a.created_at)));
   const total = compras.reduce((a, c) => a + (c.costo_total || 0), 0);
+  const lista = await listaDeCompras();
 
   cont.innerHTML = `
+    ${bloqueListaCompras(lista)}
+
     <button class="btn btn--primary btn--block" data-accent="produccion" id="cp-nueva">Registrar compra</button>
 
     <div class="between" style="margin:var(--sp-5) 0 var(--sp-3)">
@@ -1878,6 +1926,56 @@ async function pantallaCompras(cont) {
     : '<p class="faint" style="margin:0">Esta semana no hay compras cargadas.</p>'}`;
 
   cont.querySelector('#cp-nueva').addEventListener('click', () => hojaCompra());
+
+  // Tocar un insumo de la lista abre la compra con la cantidad que falta
+  cont.querySelectorAll('[data-comprar]').forEach((el) => el.addEventListener('click', () => {
+    const item = lista.items.find((i) => i.insumo.id === el.dataset.comprar);
+    hojaCompra({ insumoId: item.insumo.id, cantidad: item.comprar });
+  }));
+
+  cont.querySelector('#cp-compartir')?.addEventListener('click', () => {
+    window.open(`https://wa.me/?text=${encodeURIComponent(textoListaDeCompras(lista))}`, '_blank', 'noopener');
+  });
+}
+
+/**
+ * La lista de compras arriba de todo en Compras: es lo primero que se mira
+ * antes de salir a comprar. Si no falta nada, no ocupa lugar.
+ */
+function bloqueListaCompras(lista) {
+  if (!lista.productos.length) return '';
+
+  const total = lista.items.reduce((a, i) => a + i.costo, 0);
+  const pedidos = lista.productos
+    .map((p) => `${ui.cantidad(p.falta)} ${ui.esc(p.producto.nombre)}`).join(' · ');
+
+  return `
+    <div class="card lista-compras" data-accent="produccion">
+      <div class="between">
+        <h3 class="lista-compras__titulo">Lista de compras</h3>
+        ${lista.items.length && verCostos() ? `<b class="num">≈ ${ui.money(total)}</b>` : ''}
+      </div>
+      <p class="faint lista-compras__para">Para los pedidos abiertos falta producir: ${pedidos}</p>
+
+      ${lista.items.length ? `
+        <div class="lista">${lista.items.map((i) => `
+          <button class="fila" data-comprar="${i.insumo.id}">
+            <div class="fila__main">
+              <div class="fila__titulo">${ui.esc(i.insumo.nombre)}</div>
+              <div class="fila__meta">hay ${ui.cantidad(i.disponible, i.insumo.unidad_medida)}
+                · hacen falta ${ui.cantidad(i.requerido, i.insumo.unidad_medida)}</div>
+            </div>
+            <div class="fila__lado"><b class="num">${ui.cantidad(i.comprar, i.insumo.unidad_medida)}</b></div>
+          </button>`).join('')}
+        </div>
+        <button class="btn btn--block lista-compras__compartir" id="cp-compartir">Mandar por WhatsApp</button>`
+      : '<p class="faint" style="margin:0">Con el stock de insumos alcanza: no hay que comprar nada.</p>'}
+
+      ${lista.sinReceta.length ? `
+        <div class="alerta alerta--warn lista-compras__aviso">
+          Sin receta cargada, no se sabe qué comprar para: ${lista.sinReceta.map((p) => ui.esc(p.nombre)).join(', ')}.
+        </div>` : ''}
+    </div>`;
 }
 
 /**
@@ -1889,7 +1987,7 @@ async function pantallaCompras(cont) {
  * La cantidad puede ir en otra unidad de la misma familia: 500 g de algo que se
  * mide en kg se guarda como 0,5 kg.
  */
-function hojaCompra({ insumoId = null } = {}) {
+function hojaCompra({ insumoId = null, cantidad = null } = {}) {
   let sel = insumoId ? state.insumoPorId(insumoId) : null;
   let nuevo = null;            // nombre del insumo a crear, si no existe
   let medio = 'efectivo';
@@ -1911,7 +2009,8 @@ function hojaCompra({ insumoId = null } = {}) {
       <div class="row">
         <div class="field grow">
           <label for="hc-cant">Cantidad</label>
-          <input class="input" id="hc-cant" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+          <input class="input" id="hc-cant" type="number" inputmode="decimal" min="0" step="any" placeholder="0"
+                 value="${cantidad > 0 ? Math.round(cantidad * 100) / 100 : ''}">
         </div>
         <div class="field">
           <label for="hc-um">Unidad</label>

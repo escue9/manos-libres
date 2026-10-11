@@ -1386,7 +1386,7 @@ async function modalRevisar(pedidoWeb, buzon, indice, cont, vista) {
         });
         await refrescar();
         ui.toast(faltantes.length
-          ? `Pedido aceptado · falta producir ${faltantes.length} ${faltantes.length === 1 ? 'producto' : 'productos'}`
+          ? `Pedido aceptado · falta producir ${faltantes.length} ${faltantes.length === 1 ? 'producto' : 'productos'}: mirá la lista de compras`
           : 'Pedido aceptado');
         modalBuzon(buzon, cont, vista, indice + 1);
       } catch (err) {
@@ -1892,9 +1892,12 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
         const { faltantes } = await crearPedido({ ...datos, clienteId });
         ui.cerrarModal();
         await refrescar();
-        ui.toast(faltantes.length
-          ? 'Pedido cargado · falta producir'
-          : 'Pedido cargado');
+        if (faltantes.length && auth.puede('gestionarInsumos')) await avisoCompras();
+        else {
+          ui.toast(faltantes.length
+            ? 'Pedido cargado · falta producir'
+            : 'Pedido cargado');
+        }
       } catch (err) {
         console.error(err);
         ui.toast(err.message || 'No se pudo guardar el pedido', true);
@@ -2005,6 +2008,53 @@ function modalAnular(pedido) {
         ui.toast(err.message, true);
       }
     }, 'Anulando…');
+  });
+}
+
+/**
+ * Después de cargar un pedido que el stock no cubre: qué hay que comprar para
+ * producirlo. La lista es la de todos los pedidos abiertos, no solo la de este,
+ * porque el insumo es uno solo y se compra junto.
+ *
+ * Import dinámico: produccion.js ya importa de acá, y el ciclo estático deja
+ * uno de los dos módulos a medio cargar cuando arranca la app.
+ */
+async function avisoCompras() {
+  const prod = await import('./produccion.js');
+  const lista = await prod.listaDeCompras();
+
+  if (!lista.items.length && !lista.sinReceta.length) {
+    return ui.toast('Pedido cargado · falta producir, y con los insumos que hay alcanza');
+  }
+
+  ui.abrirModal(`
+    <h3>Pedido cargado</h3>
+    <p class="dim" style="margin-top:calc(var(--sp-2) * -1)">No alcanza el stock: hay que producir.
+      ${lista.items.length ? 'Para los pedidos abiertos hay que comprar:' : ''}</p>
+
+    ${lista.items.length ? `
+      <div class="stack" style="margin-top:var(--sp-3)">
+        ${lista.items.map((i) => `
+          <div class="between">
+            <span>${ui.esc(i.insumo.nombre)}</span>
+            <b class="num">${ui.cantidad(i.comprar, i.insumo.unidad_medida)}</b>
+          </div>`).join('')}
+      </div>` : ''}
+
+    ${lista.sinReceta.length ? `
+      <div class="alerta alerta--warn" style="margin-top:var(--sp-3)">
+        Sin receta cargada, no se sabe qué comprar para: ${lista.sinReceta.map((p) => ui.esc(p.nombre)).join(', ')}.
+      </div>` : ''}
+
+    <button class="btn btn--primary btn--block" data-accent="produccion" id="ac-lista"
+            style="margin-top:var(--sp-4)">Ver la lista de compras</button>
+    <button class="btn btn--ghost btn--block" data-close style="margin-top:var(--sp-2);border:none">Listo</button>
+  `, (root) => {
+    root.querySelector('#ac-lista').addEventListener('click', () => {
+      ui.cerrarModal();
+      prod.mostrarCompras();
+      document.querySelector('#nav button[data-tab="produccion"]')?.click();
+    });
   });
 }
 

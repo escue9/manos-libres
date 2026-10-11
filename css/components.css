@@ -400,6 +400,14 @@ body.con-login { overflow: hidden; }
 .fila--anulada .fila__titulo,
 .fila--anulada .num { text-decoration: line-through; color: var(--text-dim) !important; }
 
+/* La lista de compras de Producción → Compras: lo que falta para los pedidos */
+.lista-compras { margin-bottom: var(--sp-5); }
+.lista-compras__titulo { margin: 0; font-size: 1rem; }
+.lista-compras__para { margin: var(--sp-1) 0 var(--sp-3); }
+.lista-compras .fila { background: var(--bg); }
+.lista-compras__compartir { margin-top: var(--sp-3); }
+.lista-compras__aviso { margin-top: var(--sp-3); }
+
 /* Fila de una tabla con faltante de insumo */
 .fila--falta td { color: var(--danger); }
 
