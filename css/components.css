@@ -407,6 +407,14 @@ body.con-login { overflow: hidden; }
 .lista-compras .fila { background: var(--bg); }
 .lista-compras__compartir { margin-top: var(--sp-3); }
 .lista-compras__aviso { margin-top: var(--sp-3); }
+.lista-compras__titulo .faint { font-family: var(--font-body); font-size: .85rem; }
+
+/* En Pedidos va plegada: una línea que se abre con un toque */
+.lista-compras--plegada > summary { list-style: none; cursor: pointer; min-height: 28px; }
+.lista-compras--plegada > summary::-webkit-details-marker { display: none; }
+.lista-compras--plegada > summary::after { content: '▾'; color: var(--text-faint); margin-left: var(--sp-2); }
+.lista-compras--plegada[open] > summary::after { content: '▴'; }
+.lista-compras--plegada[open] > summary { margin-bottom: var(--sp-1); }
 
 /* Fila de una tabla con faltante de insumo */
 .fila--falta td { color: var(--danger); }

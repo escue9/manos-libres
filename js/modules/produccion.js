@@ -1896,10 +1896,8 @@ async function pantallaCompras(cont) {
   const compras = (await db.from('compra_insumo').select().gte('fecha', desde).lte('fecha', hasta))
     .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.created_at).localeCompare(String(a.created_at)));
   const total = compras.reduce((a, c) => a + (c.costo_total || 0), 0);
-  const lista = await listaDeCompras();
-
   cont.innerHTML = `
-    ${bloqueListaCompras(lista)}
+    <div id="cp-lista"></div>
 
     <button class="btn btn--primary btn--block" data-accent="produccion" id="cp-nueva">Registrar compra</button>
 
@@ -1926,35 +1924,52 @@ async function pantallaCompras(cont) {
     : '<p class="faint" style="margin:0">Esta semana no hay compras cargadas.</p>'}`;
 
   cont.querySelector('#cp-nueva').addEventListener('click', () => hojaCompra());
+  await montarListaCompras(cont.querySelector('#cp-lista'));
+}
 
-  // Tocar un insumo de la lista abre la compra con la cantidad que falta
-  cont.querySelectorAll('[data-comprar]').forEach((el) => el.addEventListener('click', () => {
+/**
+ * Pinta la lista de compras en `caja` y la deja andando: tocar un insumo abre
+ * la compra con la cantidad que falta, y el botón la manda por WhatsApp.
+ *
+ * Está en Compras —lo primero que se mira antes de salir a comprar— y en
+ * Pedidos, plegada, porque ahí es donde se cargan los pedidos que la arman.
+ * Si no falta producir nada, no ocupa lugar.
+ */
+export async function montarListaCompras(caja, { plegada = false } = {}) {
+  if (!caja || !gestiona()) return;
+  const lista = await listaDeCompras();
+  caja.innerHTML = bloqueListaCompras(lista, plegada);
+
+  caja.querySelectorAll('[data-comprar]').forEach((el) => el.addEventListener('click', () => {
     const item = lista.items.find((i) => i.insumo.id === el.dataset.comprar);
     hojaCompra({ insumoId: item.insumo.id, cantidad: item.comprar });
   }));
 
-  cont.querySelector('#cp-compartir')?.addEventListener('click', () => {
+  caja.querySelector('[data-compartir]')?.addEventListener('click', () => {
     window.open(`https://wa.me/?text=${encodeURIComponent(textoListaDeCompras(lista))}`, '_blank', 'noopener');
   });
 }
 
-/**
- * La lista de compras arriba de todo en Compras: es lo primero que se mira
- * antes de salir a comprar. Si no falta nada, no ocupa lugar.
- */
-function bloqueListaCompras(lista) {
+function bloqueListaCompras(lista, plegada) {
   if (!lista.productos.length) return '';
 
   const total = lista.items.reduce((a, i) => a + i.costo, 0);
   const pedidos = lista.productos
     .map((p) => `${ui.cantidad(p.falta)} ${ui.esc(p.producto.nombre)}`).join(' · ');
+  const cuantos = lista.items.length
+    ? `${lista.items.length} ${lista.items.length === 1 ? 'insumo' : 'insumos'}`
+    : 'nada que comprar';
+
+  const cabecera = `
+    <h3 class="lista-compras__titulo">Lista de compras${plegada ? ` <span class="faint">· ${cuantos}</span>` : ''}</h3>
+    ${lista.items.length && verCostos() ? `<b class="num">≈ ${ui.money(total)}</b>` : ''}`;
+
+  const [abre, cierra] = plegada
+    ? ['<details class="card lista-compras lista-compras--plegada" data-accent="produccion"><summary class="between">', '</summary>']
+    : ['<div class="card lista-compras" data-accent="produccion"><div class="between">', '</div>'];
 
   return `
-    <div class="card lista-compras" data-accent="produccion">
-      <div class="between">
-        <h3 class="lista-compras__titulo">Lista de compras</h3>
-        ${lista.items.length && verCostos() ? `<b class="num">≈ ${ui.money(total)}</b>` : ''}
-      </div>
+    ${abre}${cabecera}${cierra}
       <p class="faint lista-compras__para">Para los pedidos abiertos falta producir: ${pedidos}</p>
 
       ${lista.items.length ? `
@@ -1968,14 +1983,14 @@ function bloqueListaCompras(lista) {
             <div class="fila__lado"><b class="num">${ui.cantidad(i.comprar, i.insumo.unidad_medida)}</b></div>
           </button>`).join('')}
         </div>
-        <button class="btn btn--block lista-compras__compartir" id="cp-compartir">Mandar por WhatsApp</button>`
+        <button class="btn btn--block lista-compras__compartir" data-compartir>Mandar por WhatsApp</button>`
       : '<p class="faint" style="margin:0">Con el stock de insumos alcanza: no hay que comprar nada.</p>'}
 
       ${lista.sinReceta.length ? `
         <div class="alerta alerta--warn lista-compras__aviso">
           Sin receta cargada, no se sabe qué comprar para: ${lista.sinReceta.map((p) => ui.esc(p.nombre)).join(', ')}.
         </div>` : ''}
-    </div>`;
+    ${plegada ? '</details>' : '</div>'}`;
 }
 
 /**

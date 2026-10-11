@@ -1163,6 +1163,8 @@ async function pantallaPedidos(cont, vista) {
   cont.innerHTML = `
     ${bloqueAlertas(alertas)}
 
+    ${agrupado ? '<div id="ped-lista-compras"></div>' : ''}
+
     <div class="chips" style="margin-bottom:var(--sp-3)">
       ${FILTROS.map((f) => `
         <button class="chip ${f.id === filtroPedidos ? 'sel' : ''}" data-filtro="${f.id}">${f.etiqueta}</button>
@@ -1190,6 +1192,10 @@ async function pantallaPedidos(cont, vista) {
     el.addEventListener('click', () => modalPedido(el.dataset.pedido, vista)));
 
   if (puedeCargar()) fab(cont, () => modalPedido(null, vista), 'Nuevo pedido');
+
+  // Import dinámico por el mismo ciclo que en avisoCompras()
+  const caja = cont.querySelector('#ped-lista-compras');
+  if (caja) (await import('./produccion.js')).montarListaCompras(caja, { plegada: true });
 }
 
 /**
