@@ -884,9 +884,16 @@ async function revertirVenta(pedidoId, stockTocado) {
  *
  * Los snapshots de precio y costo se congelan acá: si mañana sube la harina,
  * el margen de esta venta no cambia (PDR §3).
+ *
+ * El cliente es opcional. Si llega un nombre escrito y no un id, se usa el
+ * cliente que ya se llame así —sin distinguir mayúsculas— y si no hay ninguno
+ * se crea. Va antes del pedido: si el alta falla, no queda media venta.
  */
-export async function registrarVenta({ lineas, medio, clienteId = null }) {
+export async function registrarVenta({ lineas, medio, clienteId = null, clienteNombre = '' }) {
   if (!lineas?.length) throw new Error('La venta no tiene productos');
+
+  const nombre = String(clienteNombre || '').trim();
+  if (!clienteId && nombre) clienteId = (await clientePorNombre(nombre)).id;
 
   const total = lineas.reduce((a, l) => a + l.producto.precio_venta * l.cantidad, 0);
   const un = state.unidadNegocio.id;
@@ -971,6 +978,14 @@ export async function registrarVenta({ lineas, medio, clienteId = null }) {
     await revertirVenta(pedido.id, stockTocado);
     throw e;
   }
+}
+
+/** El cliente con ese nombre, o uno nuevo si no hay. */
+async function clientePorNombre(nombre) {
+  const clave = nombre.toLocaleLowerCase('es');
+  const todos = await db.from('cliente').select();
+  return todos.find((c) => String(c.nombre || '').trim().toLocaleLowerCase('es') === clave)
+    || guardarCliente({ nombre });
 }
 
 async function totalVendidoHoy() {
@@ -2191,12 +2206,10 @@ function abrirCobro(total, onListo) {
     <div class="cobro__detalle">${lineas
       .map((l) => `${l.cantidad}× ${ui.esc(l.producto.nombre)}`).join(' · ')}</div>
 
-    ${frecuentes.length ? `
-      <div class="cobro__label" style="margin-bottom:var(--sp-2)">¿Para quién? (opcional)</div>
-      <div class="chips" id="chips">
-        <button class="chip sel" data-cli="">Sin nombre</button>
-        ${frecuentes.map((c) => `<button class="chip" data-cli="${c.id}">${ui.esc(c.nombre)}</button>`).join('')}
-      </div>` : ''}
+    <label class="cobro__label" for="cli-nombre">¿Para quién? (opcional)</label>
+    <input class="input cobro__cliente" id="cli-nombre" autocomplete="off" autocapitalize="words"
+           enterkeyhint="done" placeholder="Nombre del cliente">
+    <div class="chips cobro__clientes" id="chips"></div>
 
     <div class="medios">
       ${MEDIOS.map((m) => `
@@ -2210,14 +2223,39 @@ function abrirCobro(total, onListo) {
             style="margin-top:var(--sp-2);border:none">Cancelar</button>
   `, (root) => {
     const btn = root.querySelector('#confirmar');
+    const campo = root.querySelector('#cli-nombre');
+    const chips = root.querySelector('#chips');
 
-    root.querySelector('#chips')?.addEventListener('click', (e) => {
-      const c = e.target.closest('.chip');
-      if (!c) return;
-      root.querySelectorAll('.chip').forEach((x) => x.classList.remove('sel'));
-      c.classList.add('sel');
-      clienteId = c.dataset.cli || null;
+    // Con el campo vacío, los que más compran; escribiendo, los que coinciden.
+    // Un nombre que no está en la lista se da de alta al confirmar la venta.
+    function pintarClientes() {
+      const txt = campo.value.trim().toLocaleLowerCase('es');
+      const opciones = txt
+        ? state.clientes.filter((c) => c.nombre.toLocaleLowerCase('es').includes(txt)).slice(0, 4)
+        : frecuentes;
+      const existe = state.clientes.some((c) => c.nombre.trim().toLocaleLowerCase('es') === txt);
+
+      chips.innerHTML = opciones.map((c) => `
+        <button class="chip ${c.id === clienteId ? 'sel' : ''}" data-cli="${c.id}">${ui.esc(c.nombre)}</button>
+      `).join('') + (txt && !existe
+        ? `<span class="faint cobro__nuevo">«${ui.esc(campo.value.trim())}» se agrega como cliente nuevo</span>`
+        : '');
+    }
+
+    campo.addEventListener('input', () => {
+      clienteId = null;
+      pintarClientes();
     });
+
+    chips.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-cli]');
+      if (!c) return;
+      clienteId = c.dataset.cli;
+      campo.value = state.clientePorId(clienteId)?.nombre || '';
+      pintarClientes();
+    });
+
+    pintarClientes();
 
     root.querySelectorAll('.medio').forEach((m) => m.addEventListener('click', () => {
       root.querySelectorAll('.medio').forEach((x) => x.classList.remove('sel'));
@@ -2235,7 +2273,7 @@ function abrirCobro(total, onListo) {
       ui.bloquearModal();
 
       try {
-        await registrarVenta({ lineas, medio, clienteId });
+        await registrarVenta({ lineas, medio, clienteId, clienteNombre: campo.value });
         carrito = {};                       // se vacía apenas la venta existe
         ui.bloquearModal(false);
         ui.cerrarModal();

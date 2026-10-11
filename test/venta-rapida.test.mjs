@@ -72,6 +72,30 @@ t('costo mercaderia = 12*350 + 2*1200', c.costoMercaderia===12*350+2*1200);
 t('margen bruto', c.margenBruto===16600-(4200+2400));
 t('caja percibida coincide', calc.saldoCaja(movs)===16600);
 
+console.log('\n── el nombre del cliente escrito en la venta');
+const clientesAntes = (await db.from('cliente').select()).length;
+const una = [{ producto: carne, cantidad: 1 }];
+
+const v1 = await ped.registrarVenta({ lineas: una, medio: 'efectivo', clienteNombre: '  Mariela Gómez ' });
+const mariela = await db.from('cliente').select().eq('id', v1.pedido.cliente_id).single();
+t('un nombre nuevo da de alta al cliente', mariela?.nombre === 'Mariela Gómez');
+t('y la venta queda a su nombre', !!v1.pedido.cliente_id);
+
+const v2 = await ped.registrarVenta({ lineas: una, medio: 'efectivo', clienteNombre: 'mariela gómez' });
+t('el mismo nombre, con otras mayúsculas, usa el cliente que ya está',
+  v2.pedido.cliente_id === mariela.id);
+t('no se duplica el cliente', (await db.from('cliente').select()).length === clientesAntes + 1);
+
+const otro = await ped.guardarCliente({ nombre: 'Club de barrio' });
+const v3 = await ped.registrarVenta({ lineas: una, medio: 'efectivo', clienteId: otro.id, clienteNombre: 'Cualquiera' });
+t('si viene el id, manda el id', v3.pedido.cliente_id === otro.id);
+t('y el nombre escrito no da de alta a nadie',
+  !(await db.from('cliente').select()).some((c) => c.nombre === 'Cualquiera'));
+
+const v4 = await ped.registrarVenta({ lineas: una, medio: 'efectivo', clienteNombre: '   ' });
+t('sin nombre la venta queda sin cliente', v4.pedido.cliente_id == null);
+t('y no se crea ningún cliente vacío', (await db.from('cliente').select()).length === clientesAntes + 2);
+
 console.log('\n── permisos en la venta');
 auth.rol='trabajadora';
 t('la trabajadora puede entrar a pedidos', auth.puedeVer('pedidos'));

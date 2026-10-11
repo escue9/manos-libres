@@ -614,6 +614,13 @@ body.venta-activa .venta-barra { bottom: calc(72px + var(--safe-b)); }
   margin-bottom: var(--sp-5);
 }
 
+/* El cliente: se escribe o se toca uno de los chips de abajo */
+.cobro__cliente { display: block; width: 100%; margin: var(--sp-2) 0; }
+.cobro__cliente:has(+ .cobro__clientes:empty) { margin-bottom: var(--sp-4); }
+.cobro__clientes { margin-bottom: var(--sp-4); align-items: center; }
+.cobro__clientes:empty { display: none; }
+.cobro__nuevo { font-size: .8rem; }
+
 .chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .chip {
   min-height: 44px; padding: 0 15px;
