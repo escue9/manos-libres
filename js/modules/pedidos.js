@@ -738,7 +738,7 @@ async function pagoVentaDePedido(pedidoId) {
 /**
  * Genera lo que cobra quien vendió, un pago por cada cobro del pedido.
  *
- * El 20% de la ganancia bruta se cobra cuando el cliente PAGA, no cuando se
+ * La parte de la venta se cobra cuando el cliente PAGA, no cuando se
  * entrega: Nueve90 se lleva el pedido el viernes y paga el lunes, y recién el
  * lunes hay plata para repartir. Cada cobro genera la parte proporcional de
  * `pedido.pago_venta_total`, que quedó congelado al entregar (regla 4). El

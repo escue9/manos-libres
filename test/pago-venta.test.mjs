@@ -1,5 +1,5 @@
 /**
- * Pago por venta: el 20% de la ganancia bruta para quien vende y entrega.
+ * Pago por venta: la parte de la ganancia bruta para quien vende y entrega.
  *
  * Se congela al entregar y se cobra cuando paga el cliente: cada cobro genera
  * su parte. Lo que importa es que la plata no se duplique, que no cambie con
@@ -45,8 +45,11 @@ t('queda en el producto', (await db.from('producto').select().eq('id', carne.id)
 let fallo = null;
 try { await prod.fijarPagoVenta(carne.id, -5); } catch (e) { fallo = e; }
 t('un pago negativo no pasa', !!fallo);
-t('la sugerencia es el 20% de la ganancia bruta',
-  prod.pagoVentaSugerido({ precio_venta: 1500, costo_manual: 873 }) === Math.round((1500 - 873) * 0.2));
+t('la sugerencia de venta es el 25% de la ganancia bruta',
+  prod.pagoVentaSugerido({ precio_venta: 1500, costo_manual: 873 }) === Math.round((1500 - 873) * 0.25));
+t('la de producción, el 50%',
+  prod.pagoProduccionSugerido({ precio_venta: 1500, costo_manual: 873 }) === Math.round((1500 - 873) * 0.5));
+t('el reparto suma el 100%', Math.abs(calc.REPARTO.produccion + calc.REPARTO.venta + calc.REPARTO.reinversion - 1) < 1e-9);
 await state.cargar();
 
 console.log('\n── un pedido entregado congela lo que le toca a quien vendió');

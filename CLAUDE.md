@@ -98,7 +98,7 @@ Una trabajadora ve solo lo propio: lo que produjo, sus días y su total. Nunca l
 
 ### 9. Se cobra por producción y por venta
 
-La **ganancia bruta** de cada producto (precio − insumos) se reparte: **60%** para quien lo produce, **20%** para quien genera la venta y la entrega, **20%** para la reinversión de Manos Libres.
+La **ganancia bruta** de cada producto (precio − insumos) se reparte: **50%** para quien lo produce, **25%** para quien genera la venta y la entrega, **25%** para la reinversión de Manos Libres (`calc.REPARTO`). Hasta el 12/10/2026 fue 60/20/20: lo ya producido o vendido conserva el monto con el que se congeló.
 
 - **Producción** (desde octubre de 2026): cada producto tiene `pago_produccion` y quien lo produce lo cobra (`pago_produccion`, la tabla). Las jornadas son asistencia, sin plata. La paga **es costo**: entra en `calc.costoEfectivo`, y por eso el costo laboral del cierre semanal ya no la suma.
 - **Venta** (desde el 12/10/2026): cada producto tiene `pago_venta`. Al entregar un pedido queda `vendido_por` y se congela `pago_venta_total`; **se cobra cuando paga el cliente**: cada cobro genera su parte en `pago_venta`. No entra en el snapshot de costo: el cierre lo resta en su propia línea.

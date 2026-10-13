@@ -629,7 +629,7 @@ export async function fijarPagoProduccion(productoId, monto) {
 
 /**
  * Cuánto se le paga a quien vende y entrega una unidad de este producto: el
- * 20% de la ganancia bruta (precio menos insumos), redondeado a mano.
+ * parte de la venta en la ganancia bruta (calc.REPARTO), redondeado a mano.
  *
  * No es costo del producto como el de producción: se genera recién cuando el
  * cliente paga (pedidos.js §generarPagosVenta) y el cierre lo resta en su
@@ -650,11 +650,19 @@ export async function fijarPagoVenta(productoId, monto) {
   return valor;
 }
 
-/** El 20% de la ganancia bruta de un producto, para sugerir el pago por venta. */
-export function pagoVentaSugerido(producto) {
+/** Lo que le toca a cada parte de la ganancia bruta de un producto (calc.REPARTO). */
+function parteDeLaBruta(producto, parte) {
   const bruta = (producto.precio_venta || 0) - calc.costoBase(producto);
-  return bruta > 0 ? Math.round(bruta * 0.2) : 0;
+  return bruta > 0 ? Math.round(bruta * calc.REPARTO[parte]) : 0;
 }
+
+/** Para sugerir el pago por venta de un producto. */
+export const pagoVentaSugerido = (producto) => parteDeLaBruta(producto, 'venta');
+
+/** Para sugerir el pago por producción de un producto. */
+export const pagoProduccionSugerido = (producto) => parteDeLaBruta(producto, 'produccion');
+
+const pct = (parte) => `${Math.round(calc.REPARTO[parte] * 100)}%`;
 
 /**
  * Bloque "Quiénes trabajan" de la orden.
@@ -2426,13 +2434,14 @@ function editorReceta(productoId, recetaOriginal) {
     <div class="field" style="margin-bottom:var(--sp-4)">
       <label for="r-pago">Se le paga a quien lo produce, por unidad</label>
       <input class="input" id="r-pago" type="number" inputmode="decimal" step="any" min="0"
-             placeholder="Sin definir" value="${p.pago_produccion ?? ''}" ${soloLectura ? 'disabled' : ''}>
+             placeholder="${verCostos() && pagoProduccionSugerido(p) ? `El ${pct('produccion')} de la ganancia bruta: ${pagoProduccionSugerido(p)}` : 'Sin definir'}"
+             value="${p.pago_produccion ?? ''}" ${soloLectura ? 'disabled' : ''}>
       <span class="faint">Es costo: entra en el margen. Sin definir, la orden de este producto no cierra.</span>
     </div>
     <div class="field" style="margin-bottom:var(--sp-4)">
       <label for="r-venta">Se le paga a quien lo vende y entrega, por unidad</label>
       <input class="input" id="r-venta" type="number" inputmode="decimal" step="any" min="0"
-             placeholder="${verCostos() && pagoVentaSugerido(p) ? `El 20% de la ganancia bruta: ${pagoVentaSugerido(p)}` : 'Sin definir'}"
+             placeholder="${verCostos() && pagoVentaSugerido(p) ? `El ${pct('venta')} de la ganancia bruta: ${pagoVentaSugerido(p)}` : 'Sin definir'}"
              value="${p.pago_venta ?? ''}" ${soloLectura ? 'disabled' : ''}>
       <span class="faint">Se cobra cuando el cliente paga. Sin definir, la venta no genera pago.</span>
     </div>

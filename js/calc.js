@@ -188,6 +188,16 @@ export function margenPct(precioVenta, costoUnitario) {
   return margen(precioVenta, costoUnitario).pct;
 }
 
+/**
+ * Cómo se reparte la ganancia bruta de cada producto (precio menos insumos).
+ *
+ * Arrancó en 60/20/20 y el 13/10/2026 pasó a 50/25/25. Sirve para SUGERIR los
+ * montos por unidad de cada producto: lo que se paga de verdad es lo cargado en
+ * producto.pago_produccion y producto.pago_venta, y lo ya producido o vendido
+ * conserva el monto con el que se congeló (regla 4).
+ */
+export const REPARTO = { produccion: 0.5, venta: 0.25, reinversion: 0.25 };
+
 /** Umbral de alerta del PDR §5.4: margen bruto bajo 25%. */
 export const MARGEN_MINIMO = 25;
 
@@ -294,7 +304,7 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
   const gastosOperativos = gastos.reduce(
     (a, g) => a + (g.tipo === 'ingreso' ? -g.monto : g.monto), 0);
 
-  // El 20% de quien vendió y entregó: lo congelado en cada pedido entregado.
+  // La parte de quien vendió y entregó: lo congelado en cada pedido entregado.
   // Va por devengado, como todo el cierre: se reconoce al entregar aunque se
   // le pague a quien vendió cuando cobre el pedido (regla 5)
   const pagoVenta = pedidos

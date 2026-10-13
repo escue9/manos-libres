@@ -354,3 +354,18 @@ trabajadora solo si la venta es suya.
 Migración: `supabase/migrations/20261012_pago_venta.sql`. Base local v6. Tests:
 `test/pago-venta.test.mjs`.
 
+### El reparto pasa a 50/25/25 (13/10/2026)
+
+Juan Martín lo comparó con la semana del 06/10 y eligió **50% producción, 25% venta y
+entrega, 25% reinversión**. Con esa semana: Rocío $156.187 en vez de $187.424, la venta
+$78.094 en vez de $62.475 y la reinversión lo mismo que la venta.
+
+- El reparto vive en `calc.REPARTO` y sirve para **sugerir** los montos por unidad en
+  la receta. Lo que se paga es lo cargado en cada producto.
+- Montos por unidad (redondeados a la decena): carne 310 / 160, jamón y queso 380 /
+  190, roquefort 320 / 160, pizzeta 550 / 280, pizza 2.330 / 1.160, bondiola 2.680 /
+  1.340 (producción / venta).
+- **Lo de la semana del 06/10 de Rocío queda al 60%**: ya se le pagaron $188.000 y lo
+  congelado no se recalcula (regla 4). Las ventas de esa semana, que no estaban
+  asignadas, entran al 25%.
+
