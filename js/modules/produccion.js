@@ -2430,6 +2430,7 @@ function editorReceta(productoId, recetaOriginal) {
     <div class="field" style="margin-bottom:var(--sp-4)">
       <label for="r-rinde">Una vuelta de receta rinde</label>
       <input class="input" id="r-rinde" type="number" inputmode="numeric" min="1" value="${rinde}" ${soloLectura ? 'disabled' : ''}>
+      <span class="faint">Los insumos de abajo son los de esa vuelta: si rinde 30 empanadas, van 30 tapas.</span>
     </div>
     <div class="field" style="margin-bottom:var(--sp-4)">
       <label for="r-pago">Se le paga a quien lo produce, por unidad</label>
@@ -2459,7 +2460,11 @@ function editorReceta(productoId, recetaOriginal) {
     const salida = root.querySelector('#r-costo');
 
     function pintarLineas() {
-      cont.innerHTML = lineas.length ? lineas.map((l, idx) => {
+      const cabecera = `
+        <div class="receta-linea__nums receta-linea__cabecera" aria-hidden="true">
+          <span>Cantidad</span><span>Unidad</span><span>Merma %</span>
+        </div>`;
+      cont.innerHTML = lineas.length ? cabecera + lineas.map((l, idx) => {
         const insumo = state.insumoPorId(l.insumo_id);
         const unidades = calc.unidadesCompatibles(insumo?.unidad_medida);
         return `

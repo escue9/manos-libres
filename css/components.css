@@ -522,6 +522,8 @@ body.con-login { overflow: hidden; }
 /* cantidad · unidad · merma % · quitar — entra en una línea a 390px */
 .receta-linea__nums { display: grid; grid-template-columns: minmax(0, 1fr) 78px 62px 44px; gap: var(--sp-2); }
 .receta-linea__nums .btn { padding: 0; min-height: 44px; }
+/* Los títulos de las columnas, una sola vez arriba de las líneas */
+.receta-linea__cabecera { padding: 0 var(--sp-3); font-size: .75rem; color: var(--text-faint); }
 
 /* Input de cantidad al costado de un nombre */
 .cant-chica { width: 86px; text-align: right; flex: none; }
