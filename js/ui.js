@@ -11,6 +11,10 @@ const fmtMoneda = new Intl.NumberFormat('es-AR', {
 
 const fmtFecha = new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit' });
 
+/** El pie de todo lo que se imprime. */
+export const PIE_PAPELES = 'Manos Libres · Cocina comunitaria del CIC Barrio Movediza · '
+  + 'Federación de Organizaciones Sociales «Mesa Solidaria Tandil»';
+
 /** Estado del modal único. Ver abrirModal() / bloquearModal(). */
 let modalBloqueado = false;
 let alCerrarModal = null;
@@ -201,6 +205,63 @@ export const ui = {
     el.textContent = msg;
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 2800);
+  },
+
+  /* --- papeles y planillas --- */
+
+  /**
+   * Ventana de impresión del navegador, que en el celular ofrece "Guardar como
+   * PDF". Generar un PDF a mano necesitaría una librería y la regla 2 no las
+   * admite.
+   *
+   * `w` es la ventana: si el papel necesita leer la base antes de armarse, hay
+   * que abrirla con window.open() en el mismo click, antes del primer await.
+   * Abierta después, el navegador del celular la toma por popup y la bloquea.
+   * Sin `w`, se abre acá.
+   */
+  imprimir(titulo, cuerpo, { w = null, estilos = '', ancho = 720, pie = null } = {}) {
+    w ||= window.open('', '_blank');
+    if (!w) return this.toast('El navegador bloqueó la ventana de impresión', true);
+
+    w.document.write(`
+      <!doctype html><html lang="es"><head><meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>${titulo}</title>
+      <style>
+        body { font-family: system-ui, sans-serif; max-width: ${ancho}px; margin: 0 auto; padding: 32px 24px; color: #111; }
+        h1 { font-size: 22px; margin: 0 0 2px; }
+        .sub { color: #666; margin: 0 0 24px; font-size: 14px; }
+        h2 { font-size: 15px; margin: 24px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        td { padding: 5px 0; }
+        td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 12px; }
+        tr.total td { border-top: 1px solid #333; font-weight: 700; padding-top: 8px; }
+        .pie { margin-top: 32px; color: #888; font-size: 12px; }
+        ${estilos}
+      </style></head><body>${cuerpo}
+      <p class="pie">${pie ?? `${PIE_PAPELES} · emitido el ${this.fecha(this.hoyISO())}`}</p>
+      </body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+  },
+
+  /**
+   * CSV para abrir en una planilla.
+   *
+   * Separador `;` y BOM al principio: Excel en español interpreta la coma como
+   * decimal y sin el BOM se come los acentos.
+   */
+  descargarCSV(nombre, filas) {
+    const escapar = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = '﻿' + filas.map((f) => f.map(escapar).join(';')).join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nombre;
+    a.click();
+    URL.revokeObjectURL(url);
+    this.toast('Planilla descargada');
   },
 
   /**

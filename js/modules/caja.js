@@ -870,64 +870,17 @@ async function pantallaRentabilidad(cont) {
 /*  Exportables                                                        */
 /* ------------------------------------------------------------------ */
 
-/**
- * CSV para abrir en una planilla.
- *
- * Separador `;` y BOM al principio: Excel en español interpreta la coma como
- * decimal y sin el BOM se come los acentos.
- */
+/** Los movimientos en una planilla. El formato está en ui.descargarCSV(). */
 function exportarCSV(movimientos) {
   auth.exigir('exportar');
 
-  const escapar = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const filas = [
+  ui.descargarCSV(`caja-${hoyISO()}.csv`, [
     ['fecha', 'tipo', 'origen', 'rubro', 'medio', 'descripcion', 'monto'],
     ...movimientos.map((m) => [
       m.fecha, m.tipo, ORIGENES[m.origen] || m.origen, m.categoria_gasto || '',
       medioEtiqueta(m.medio), m.descripcion || '', m.monto,
     ]),
-  ];
-
-  const csv = '﻿' + filas.map((f) => f.map(escapar).join(';')).join('\r\n');
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `caja-${hoyISO()}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-  ui.toast('CSV descargado');
-}
-
-/**
- * Los reportes salen por la ventana de impresión del navegador, que en el
- * celular ofrece "Guardar como PDF". Generar un PDF a mano necesitaría una
- * librería y la regla 2 no las admite.
- */
-function ventanaImpresion(titulo, cuerpo) {
-  const w = window.open('', '_blank');
-  if (!w) return ui.toast('El navegador bloqueó la ventana de impresión', true);
-
-  w.document.write(`
-    <!doctype html><html lang="es"><head><meta charset="utf-8">
-    <title>${titulo}</title>
-    <style>
-      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 0 auto; padding: 32px 24px; color: #111; }
-      h1 { font-size: 22px; margin: 0 0 2px; }
-      .sub { color: #666; margin: 0 0 24px; font-size: 14px; }
-      h2 { font-size: 15px; margin: 24px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-      table { width: 100%; border-collapse: collapse; font-size: 14px; }
-      td { padding: 5px 0; }
-      td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-      tr.total td { border-top: 1px solid #333; font-weight: 700; padding-top: 8px; }
-      .pie { margin-top: 32px; color: #888; font-size: 12px; }
-    </style></head><body>${cuerpo}
-    <p class="pie">Manos Libres · Cocina comunitaria del CIC Barrio Movediza ·
-      Federación de Organizaciones Sociales «Mesa Solidaria Tandil» ·
-      emitido el ${ui.fecha(hoyISO())}</p>
-    </body></html>`);
-  w.document.close();
-  w.focus();
-  w.print();
+  ]);
 }
 
 function imprimirRendicion(desde, hasta, datos) {
@@ -946,7 +899,7 @@ function imprimirRendicion(desde, hasta, datos) {
 
   const fila = (n, v) => `<tr><td>${n}</td><td class="n">${ui.money(v)}</td></tr>`;
 
-  ventanaImpresion('Rendición de cuentas', `
+  ui.imprimir('Rendición de cuentas', `
     <h1>Rendición de cuentas</h1>
     <p class="sub">${ui.fecha(desde)} al ${ui.fecha(hasta)}</p>
 
@@ -991,7 +944,7 @@ async function imprimirImpacto(desde, hasta) {
 
   const fila = (n, v) => `<tr><td>${n}</td><td class="n">${v}</td></tr>`;
 
-  ventanaImpresion('Impacto social', `
+  ui.imprimir('Impacto social', `
     <h1>Impacto social</h1>
     <p class="sub">${ui.fecha(desde)} al ${ui.fecha(hasta)}</p>
 

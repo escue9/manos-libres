@@ -965,6 +965,59 @@ export async function demandaPendiente() {
 }
 
 /**
+ * Lo que falta entregar, mirado de las dos formas que sirven para salir a
+ * repartir: pedido por pedido (qué lleva cada cliente y cuánto le queda por
+ * pagar) y producto por producto (cuánto hay que tener listo y para quién).
+ *
+ * Las ventas de mostrador no entran: nacen entregadas.
+ */
+export async function pendientesDeEntrega() {
+  const [todos, items, productos, clientes] = await Promise.all([
+    db.from('pedido').select(),
+    db.from('pedido_item').select(),
+    db.from('producto').select(),
+    db.from('cliente').select(),
+  ]);
+
+  const nombreProducto = (id) => productos.find((p) => p.id === id)?.nombre || 'Producto';
+  const abiertos = todos.filter((p) => ESTADOS_ABIERTOS.includes(p.estado) && p.es_mostrador !== true);
+
+  const pedidos = abiertos.map((pedido) => {
+    const cliente = clientes.find((c) => c.id === pedido.cliente_id) || null;
+    const lineas = items
+      .filter((it) => it.pedido_id === pedido.id)
+      .map((it) => ({
+        producto_id: it.producto_id,
+        nombre: nombreProducto(it.producto_id),
+        cantidad: it.cantidad,
+        precio: it.precio_unitario,
+        subtotal: it.cantidad * (it.precio_unitario || 0),
+      }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+    const resta = Math.max(0, (pedido.total || 0) - (pedido.monto_cobrado || 0));
+    return { pedido, cliente, nombreCliente: cliente?.nombre || 'Sin nombre', lineas, resta };
+  }).sort((a, b) => (a.pedido.fecha_entrega || '').localeCompare(b.pedido.fecha_entrega || '')
+    || a.nombreCliente.localeCompare(b.nombreCliente, 'es'));
+
+  const porProducto = new Map();
+  for (const p of pedidos) {
+    for (const l of p.lineas) {
+      const fila = porProducto.get(l.producto_id) || { producto_id: l.producto_id, nombre: l.nombre, total: 0, porCliente: [] };
+      fila.total += l.cantidad;
+      fila.porCliente.push({ nombre: p.nombreCliente, cantidad: l.cantidad, fecha: p.pedido.fecha_entrega });
+      porProducto.set(l.producto_id, fila);
+    }
+  }
+
+  return {
+    pedidos,
+    productos: [...porProducto.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
+    total: pedidos.reduce((a, p) => a + (p.pedido.total || 0), 0),
+    aCobrar: pedidos.reduce((a, p) => a + p.resta, 0),
+  };
+}
+
+/**
  * Las alertas del PDR §5.4 que dependen de pedidos.
  * Todas miran fechas, así que se calculan al vuelo y no se guardan en ningún lado.
  */
@@ -1322,6 +1375,8 @@ async function pantallaPedidos(cont, vista) {
       ${FILTROS.map((f) => `
         <button class="chip ${f.id === filtroPedidos ? 'sel' : ''}" data-filtro="${f.id}">${f.etiqueta}</button>
       `).join('')}
+      ${agrupado && visibles.length && auth.puede('exportar')
+        ? '<button class="chip" id="exportar-pendientes">Exportar</button>' : ''}
     </div>
 
     ${agrupado ? bloqueBuzon(buzon) : ''}
@@ -1340,6 +1395,7 @@ async function pantallaPedidos(cont, vista) {
   });
 
   cont.querySelector('#revisar-buzon')?.addEventListener('click', () => modalBuzon(buzon, cont, vista));
+  cont.querySelector('#exportar-pendientes')?.addEventListener('click', modalExportarPendientes);
 
   cont.querySelectorAll('[data-pedido]').forEach((el) =>
     el.addEventListener('click', () => modalPedido(el.dataset.pedido, vista)));
@@ -1349,6 +1405,112 @@ async function pantallaPedidos(cont, vista) {
   // Import dinámico por el mismo ciclo que en avisoCompras()
   const caja = cont.querySelector('#ped-lista-compras');
   if (caja) (await import('./produccion.js')).montarListaCompras(caja, { plegada: true });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Exportar lo pendiente de entrega                                   */
+/* ------------------------------------------------------------------ */
+
+function modalExportarPendientes() {
+  ui.abrirModal(`
+    <h3>Pendientes de entrega</h3>
+    <p class="dim">Cada pedido con lo que lleva y lo que falta cobrar, y el total
+      de cada producto con el detalle por cliente.</p>
+    <div class="stack" style="margin-top:var(--sp-4)">
+      <button class="btn btn--primary btn--block" data-accent="pedidos" id="exp-pdf">PDF · para imprimir o mandar</button>
+      <button class="btn btn--block" id="exp-csv">Planilla de Excel</button>
+    </div>
+  `, (root) => {
+    root.querySelector('#exp-pdf').addEventListener('click', async () => {
+      // La ventana se abre ANTES de leer la base: ver ui.imprimir()
+      const w = window.open('', '_blank');
+      if (!w) return ui.toast('El navegador bloqueó la ventana de impresión', true);
+      try {
+        imprimirPendientes(await pendientesDeEntrega(), w);
+        ui.cerrarModal();
+      } catch (e) {
+        w.close();
+        ui.toast(e.message, true);
+      }
+    });
+    root.querySelector('#exp-csv').addEventListener('click', async () => {
+      try {
+        planillaPendientes(await pendientesDeEntrega());
+        ui.cerrarModal();
+      } catch (e) {
+        ui.toast(e.message, true);
+      }
+    });
+  });
+}
+
+function imprimirPendientes({ pedidos, productos, total, aCobrar }, w) {
+  auth.exigir('exportar');
+
+  const entrega = (p) => [
+    p.fecha_entrega ? `entrega ${ui.fecha(p.fecha_entrega)}` : 'sin fecha',
+    MODOS_ENTREGA.find((m) => m.id === p.modo_entrega)?.etiqueta || 'Retira en el CIC',
+    p.direccion_entrega ? ui.esc(p.direccion_entrega) : '',
+  ].filter(Boolean).join(' · ');
+
+  ui.imprimir('Pendientes de entrega', `
+    <h1>Pendientes de entrega</h1>
+    <p class="sub">Al ${ui.fecha(ui.hoyISO())} · ${pedidos.length} ${pedidos.length === 1 ? 'pedido' : 'pedidos'}
+      · ${ui.money(total)} · falta cobrar ${ui.money(aCobrar)}</p>
+
+    <h2>Por producto</h2>
+    <table>
+      ${productos.map((x) => `
+        <tr><td><b>${ui.esc(x.nombre)}</b></td><td class="n"><b>${x.total}</b></td></tr>
+        <tr class="detalle"><td colspan="2">${x.porCliente
+          .map((c) => `${ui.esc(c.nombre)} ${c.cantidad}`).join(' · ')}</td></tr>`).join('')}
+    </table>
+
+    <h2>Por cliente</h2>
+    ${pedidos.map((x) => `
+      <div class="pedido">
+        <div class="cliente"><b>${ui.esc(x.nombreCliente)}</b>
+          ${x.cliente?.telefono ? `<span class="tel">${ui.esc(x.cliente.telefono)}</span>` : ''}</div>
+        <div class="entrega">${entrega(x.pedido)}</div>
+        <table>
+          ${x.lineas.map((l) => `
+            <tr><td>${l.cantidad} × ${ui.esc(l.nombre)}</td><td class="n">${ui.money(l.subtotal)}</td></tr>`).join('')}
+          <tr class="total"><td>Total ${ui.money(x.pedido.total)}${x.pedido.monto_cobrado
+            ? ` <span class="cobrado">· cobrado ${ui.money(x.pedido.monto_cobrado)}</span>` : ''}</td>
+            <td class="n">${x.resta > 0 ? `cobrar ${ui.money(x.resta)}` : 'pagado'}</td></tr>
+        </table>
+        ${x.pedido.notas ? `<div class="notas">${ui.esc(x.pedido.notas)}</div>` : ''}
+      </div>`).join('')}
+  `, {
+    w,
+    estilos: `
+      tr.detalle td { color: #666; font-size: 13px; padding: 0 0 8px; }
+      .pedido { break-inside: avoid; margin-bottom: 20px; }
+      .cliente { font-size: 15px; }
+      .tel { color: #666; margin-left: 8px; font-size: 13px; }
+      .entrega, .notas { color: #666; font-size: 13px; margin: 2px 0 4px; }
+      .cobrado { font-weight: 400; color: #666; }`,
+  });
+}
+
+/**
+ * Una fila por producto de cada pedido: es la forma que una planilla sabe
+ * filtrar y resumir (tabla dinámica por cliente o por producto).
+ */
+function planillaPendientes({ pedidos }) {
+  auth.exigir('exportar');
+
+  ui.descargarCSV(`pendientes-${hoyISO()}.csv`, [
+    ['entrega', 'cliente', 'telefono', 'modo', 'direccion', 'producto', 'cantidad',
+      'precio_unitario', 'subtotal', 'total_pedido', 'falta_cobrar'],
+    ...pedidos.flatMap((x) => x.lineas.map((l, i) => [
+      x.pedido.fecha_entrega || '', x.nombreCliente, x.cliente?.telefono || '',
+      etiquetaEntrega(x.pedido.modo_entrega), x.pedido.direccion_entrega || '',
+      l.nombre, l.cantidad, l.precio, l.subtotal,
+      // Lo del pedido va en su primera fila: repetido, al sumar la columna se contaría N veces
+      i === 0 ? x.pedido.total : '', i === 0 ? x.resta : '',
+    ])),
+  ]);
 }
 
 /**

@@ -23,7 +23,7 @@
 import { db } from '../db.js';
 import { state } from '../state.js';
 import { auth, ROLES } from '../auth.js';
-import { ui } from '../ui.js';
+import { ui, PIE_PAPELES } from '../ui.js';
 import * as calc from '../calc.js';
 
 const DIAS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
@@ -543,9 +543,6 @@ export async function comprobanteLiquidacion(trabajadoraId, fechaPago) {
 
 /* --- el comprobante en sí --- */
 
-const PIE_COMPROBANTE = 'Manos Libres · Cocina comunitaria del CIC Barrio Movediza · '
-  + 'Federación de Organizaciones Sociales «Mesa Solidaria Tandil»';
-
 /** dd/mm/aaaa. ui.fecha() no lleva año y un comprobante sin año no sirve. */
 function fechaCompleta(iso) {
   const [a, m, d] = String(iso || '').split('-').map(Number);
@@ -649,38 +646,20 @@ export function htmlComprobante(liq) {
 }
 
 /**
- * Ventana de impresión del navegador: de ahí sale "Guardar como PDF".
- *
- * Es la misma idea que ventanaImpresion() de caja.js, copiada y no importada:
- * aquella no se exporta y es de otro módulo. Si aparece un tercer papel para
- * imprimir, conviene mudar las dos a ui.js.
- *
- * Recibe la ventana ya abierta: ver clickComprobante().
+ * El comprobante en la ventana de impresión (ver ui.imprimir). Recibe la
+ * ventana ya abierta: ver clickComprobante().
  */
 function imprimirComprobante(liq, w) {
-  w.document.write(`
-    <!doctype html><html lang="es"><head><meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Comprobante · ${ui.esc(liq.nombre)} · ${fechaCompleta(liq.fecha_pago)}</title>
-    <style>
-      body { font-family: system-ui, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px; color: #111; }
-      h1 { font-size: 20px; margin: 0 0 2px; }
-      .sub { color: #666; margin: 0 0 24px; font-size: 14px; }
-      h2 { font-size: 15px; margin: 24px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-      table { width: 100%; border-collapse: collapse; font-size: 14px; }
-      td { padding: 5px 0; }
-      td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 12px; }
-      tr.total td { border-top: 1px solid #333; font-weight: 700; padding-top: 8px; }
+  ui.imprimir(`Comprobante · ${ui.esc(liq.nombre)} · ${fechaCompleta(liq.fecha_pago)}`, htmlComprobante(liq), {
+    w,
+    ancho: 560,
+    estilos: `
+      h1 { font-size: 20px; }
       .firma { display: flex; gap: 32px; margin-top: 64px; font-size: 13px; color: #444; }
       .firma div { flex: 1; text-align: center; }
-      .firma span { display: block; border-top: 1px solid #333; margin-bottom: 4px; }
-      .pie { margin-top: 32px; color: #888; font-size: 12px; }
-    </style></head><body>${htmlComprobante(liq)}
-    <p class="pie">${PIE_COMPROBANTE} · emitido el ${fechaCompleta(ui.hoyISO())}</p>
-    </body></html>`);
-  w.document.close();
-  w.focus();
-  w.print();
+      .firma span { display: block; border-top: 1px solid #333; margin-bottom: 4px; }`,
+    pie: `${PIE_PAPELES} · emitido el ${fechaCompleta(ui.hoyISO())}`,
+  });
 }
 
 /* ================================================================== */
