@@ -255,13 +255,37 @@ export const ui = {
   descargarCSV(nombre, filas) {
     const escapar = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const csv = '﻿' + filas.map((f) => f.map(escapar).join(';')).join('\r\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    this.descargar(nombre, csv, 'text/csv;charset=utf-8');
+    this.toast('Planilla descargada');
+  },
+
+  descargar(nombre, contenido, tipo) {
+    const url = URL.createObjectURL(new Blob([contenido], { type: tipo }));
     const a = document.createElement('a');
     a.href = url;
     a.download = nombre;
     a.click();
     URL.revokeObjectURL(url);
-    this.toast('Planilla descargada');
+  },
+
+  /**
+   * En el celular abre "Compartir" con el archivo adjunto (WhatsApp, mail…).
+   * Donde no se puede compartir archivos, como en la compu, lo descarga.
+   * Si la persona cierra el menú de compartir, no pasa nada más.
+   */
+  async compartirArchivo(nombre, contenido, tipo) {
+    const archivo = new File([contenido], nombre, { type: tipo });
+    if (navigator.canShare?.({ files: [archivo] })) {
+      try {
+        await navigator.share({ files: [archivo], title: nombre });
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        // Otro error (se venció el permiso del toque, por ejemplo): se descarga
+      }
+    }
+    this.descargar(nombre, contenido, tipo);
+    this.toast('Archivo descargado');
   },
 
   /**

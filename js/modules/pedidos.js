@@ -26,7 +26,7 @@
 import { db } from '../db.js';
 import { state } from '../state.js';
 import { auth } from '../auth.js';
-import { ui } from '../ui.js';
+import { ui, PIE_PAPELES } from '../ui.js';
 import * as calc from '../calc.js';
 import * as nube from '../nube.js';
 import * as sesion from '../sesion.js';
@@ -1417,10 +1417,21 @@ function modalExportarPendientes() {
     <p class="dim">Cada pedido con lo que lleva y lo que falta cobrar, y el total
       de cada producto con el detalle por cliente.</p>
     <div class="stack" style="margin-top:var(--sp-4)">
-      <button class="btn btn--primary btn--block" data-accent="pedidos" id="exp-pdf">PDF · para imprimir o mandar</button>
+      <button class="btn btn--primary btn--block" data-accent="pedidos" id="exp-html">Para leer en el celular</button>
+      <button class="btn btn--block" id="exp-pdf">PDF · para imprimir</button>
       <button class="btn btn--block" id="exp-csv">Planilla de Excel</button>
     </div>
   `, (root) => {
+    root.querySelector('#exp-html').addEventListener('click', async () => {
+      try {
+        auth.exigir('exportar');
+        const datos = await pendientesDeEntrega();
+        await ui.compartirArchivo(`pendientes-${hoyISO()}.html`, htmlPendientes(datos), 'text/html');
+        ui.cerrarModal();
+      } catch (e) {
+        ui.toast(e.message, true);
+      }
+    });
     root.querySelector('#exp-pdf').addEventListener('click', async () => {
       // La ventana se abre ANTES de leer la base: ver ui.imprimir()
       const w = window.open('', '_blank');
@@ -1491,6 +1502,110 @@ function imprimirPendientes({ pedidos, productos, total, aCobrar }, w) {
       .entrega, .notas { color: #666; font-size: 13px; margin: 2px 0 4px; }
       .cobrado { font-weight: 400; color: #666; }`,
   });
+}
+
+/**
+ * Lo pendiente como una página suelta, para abrir en el celular desde
+ * WhatsApp o la carpeta de descargas. No depende de la app ni de internet:
+ * todo va adentro del archivo, sin scripts.
+ *
+ * Arriba lo que hay que tener listo (por producto) y abajo una tarjeta por
+ * pedido, con el teléfono para llamar y la dirección que abre el mapa.
+ */
+export function htmlPendientes({ pedidos, productos, total, aCobrar }) {
+  const e = ui.esc.bind(ui);
+  const soloDigitos = (t) => String(t || '').replace(/[^\d+]/g, '');
+  const mapa = (dir) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${dir}, Tandil`)}`;
+
+  const tarjeta = (x) => {
+    const p = x.pedido;
+    const domicilio = p.modo_entrega === 'domicilio';
+    return `
+      <article class="pedido">
+        <header>
+          <h3>${e(x.nombreCliente)}</h3>
+          <span class="dia">${p.fecha_entrega ? ui.fecha(p.fecha_entrega) : 'sin fecha'}</span>
+        </header>
+        <p class="modo ${domicilio ? 'modo--domicilio' : ''}">${domicilio ? 'Envío a domicilio' : 'Retira en el CIC'}</p>
+        ${p.direccion_entrega ? `<a class="dato" href="${mapa(p.direccion_entrega)}">📍 ${e(p.direccion_entrega)}</a>` : ''}
+        ${x.cliente?.telefono ? `<a class="dato" href="tel:${e(soloDigitos(x.cliente.telefono))}">📞 ${e(x.cliente.telefono)}</a>` : ''}
+        <ul>
+          ${x.lineas.map((l) => `<li><b>${l.cantidad}</b> ${e(l.nombre)}</li>`).join('')}
+        </ul>
+        ${p.notas ? `<p class="notas">${e(p.notas)}</p>` : ''}
+        <footer>
+          <span>Total ${ui.money(p.total)}${p.monto_cobrado ? ` · cobrado ${ui.money(p.monto_cobrado)}` : ''}</span>
+          <b class="${x.resta > 0 ? 'cobrar' : 'pagado'}">${x.resta > 0 ? `Cobrar ${ui.money(x.resta)}` : 'Pagado'}</b>
+        </footer>
+      </article>`;
+  };
+
+  return `<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pendientes de entrega · ${ui.fecha(hoyISO())}</title>
+<style>
+  :root { --bg:#0e0e10; --surface:#16161a; --borde:#2a2a31; --texto:#f2f2f5; --dim:#9a9aa8;
+          --pedidos:#f55b1e; --clientes:#f5b800; --equipo:#1ec84a; --caja:#3db8f5; --rosa:#e8185a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--texto); font: 17px/1.4 system-ui, -apple-system, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 26px; margin: 0; color: var(--pedidos); }
+  .sub { color: var(--dim); margin: 4px 0 20px; font-size: 15px; }
+  .resumen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 28px; }
+  .resumen div { background: var(--surface); border: 1px solid var(--borde); border-radius: 12px; padding: 10px; }
+  .resumen small { display: block; color: var(--dim); font-size: 12px; }
+  .resumen b { font-size: 18px; font-variant-numeric: tabular-nums; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 10px; }
+  section { margin-bottom: 28px; }
+  .producto { background: var(--surface); border: 1px solid var(--borde); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  .producto .fila { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .producto .cant { font-size: 26px; font-weight: 800; color: var(--clientes); font-variant-numeric: tabular-nums; }
+  .producto .quienes { color: var(--dim); font-size: 14px; margin-top: 2px; }
+  .pedido { background: var(--surface); border: 1px solid var(--borde); border-left: 4px solid var(--pedidos);
+            border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .pedido header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .pedido h3 { margin: 0; font-size: 20px; }
+  .dia { color: var(--dim); font-size: 15px; white-space: nowrap; }
+  .modo { margin: 2px 0 6px; font-size: 14px; color: var(--caja); }
+  .modo--domicilio { color: var(--pedidos); }
+  .dato { display: block; color: var(--texto); text-decoration: none; padding: 6px 0; font-size: 16px; }
+  ul { list-style: none; margin: 8px 0; padding: 8px 0; border-top: 1px solid var(--borde); border-bottom: 1px solid var(--borde); }
+  li { padding: 4px 0; font-size: 18px; }
+  li b { display: inline-block; min-width: 2.2em; color: var(--clientes); font-variant-numeric: tabular-nums; }
+  .notas { color: var(--dim); font-size: 14px; margin: 6px 0; }
+  .pedido footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+                   font-size: 14px; color: var(--dim); }
+  .cobrar { color: var(--rosa); font-size: 17px; }
+  .pagado { color: var(--equipo); font-size: 17px; }
+  .pie { color: var(--dim); font-size: 12px; margin-top: 32px; }
+</style></head>
+<body><main>
+  <h1>Pendientes de entrega</h1>
+  <p class="sub">Manos Libres · al ${ui.fecha(hoyISO())}</p>
+
+  <div class="resumen">
+    <div><small>Pedidos</small><b>${pedidos.length}</b></div>
+    <div><small>Total</small><b>${ui.money(total)}</b></div>
+    <div><small>Falta cobrar</small><b>${ui.money(aCobrar)}</b></div>
+  </div>
+
+  <section>
+    <h2>Qué tener listo</h2>
+    ${productos.map((x) => `
+      <div class="producto">
+        <div class="fila"><span>${e(x.nombre)}</span><span class="cant">${x.total}</span></div>
+        <div class="quienes">${x.porCliente.map((c) => `${e(c.nombre)} ${c.cantidad}`).join(' · ')}</div>
+      </div>`).join('')}
+  </section>
+
+  <section>
+    <h2>Pedido por pedido</h2>
+    ${pedidos.map(tarjeta).join('')}
+  </section>
+
+  <p class="pie">${PIE_PAPELES} · ${ui.fecha(hoyISO())}</p>
+</main></body></html>`;
 }
 
 /**

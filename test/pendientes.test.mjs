@@ -73,5 +73,19 @@ t('con el detalle por cliente',
 t('la tarta entregada no suma: queda solo la de Wenci',
   r.productos.find((x) => x.producto_id === tarta.id)?.total === 1);
 
+console.log('\n── el archivo para el celular');
+await ped.crearPedido({
+  cliente: { nombre: 'Kiosco <b>Sol</b>', telefono: '2494 55-1234' }, fechaEntrega: '2026-10-15',
+  modoEntrega: 'domicilio', direccionEntrega: 'Chacabuco 450',
+  items: [{ producto_id: carne.id, cantidad: 3 }],
+});
+const html = ped.htmlPendientes(await ped.pendientesDeEntrega());
+t('es una página entera, sin scripts', html.startsWith('<!doctype html>') && !html.includes('<script'));
+t('trae a cada cliente', ['Wenci', 'Santi'].every((n) => html.includes(n)));
+t('el nombre escrito por alguien se escapa', html.includes('Kiosco &lt;b&gt;Sol&lt;/b&gt;') && !html.includes('<b>Sol</b>'));
+t('el teléfono se toca para llamar', html.includes('href="tel:2494551234"'));
+t('la dirección abre el mapa', html.includes('google.com/maps/search') && html.includes('Chacabuco%20450'));
+t('el total de empanadas de carne suma el pedido nuevo: 21', html.includes('<span class="cant">21</span>'));
+
 console.log(`\n${ok} pasaron · ${mal} fallaron\n`);
 process.exit(mal ? 1 : 0);
