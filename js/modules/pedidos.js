@@ -29,6 +29,7 @@ import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as calc from '../calc.js';
 import * as nube from '../nube.js';
+import * as sesion from '../sesion.js';
 import * as canalWeb from './canal-web.js';
 
 /** Tolerancia de centavo para comparar plata. Misma razón que en calc.js. */
@@ -566,7 +567,7 @@ export async function cambiarEstadoPedido(pedidoId, estado) {
  * ahí y el negativo es la señal de que falta cargar la producción. Es el mismo
  * criterio de la venta rápida.
  */
-export async function entregarPedido(pedidoId, { fecha = hoyISO() } = {}) {
+export async function entregarPedido(pedidoId, { fecha = hoyISO(), vendidoPor } = {}) {
   auth.exigir('cargarPedidos');
 
   const pedido = await db.from('pedido').select().eq('id', pedidoId).single();
@@ -623,6 +624,15 @@ export async function entregarPedido(pedidoId, { fecha = hoyISO() } = {}) {
       .update({ estado: pedido.estado, fecha_entrega: pedido.fecha_entrega }).eq('id', pedidoId);
     throw e;
   }
+
+  // Quien entrega es quien vendió, salvo que se diga otra cosa. Lo que le toca
+  // se congela acá, con el pago por unidad de hoy: lo que se cobre después,
+  // aunque sea en un mes, paga lo de este momento (regla 4)
+  await db.from('pedido').update({
+    vendido_por: vendidoPor !== undefined ? vendidoPor : await quienVende(),
+    pago_venta_total: await pagoVentaDePedido(pedidoId),
+  }).eq('id', pedidoId);
+  await generarPagosVenta(pedidoId);
 
   return db.from('pedido').select().eq('id', pedidoId).single();
 }
@@ -685,7 +695,135 @@ export async function registrarCobro(pedidoId, { monto, medio = 'efectivo', fech
   const estadoPago = calc.estadoPago(total, cobrado);
   await db.from('pedido').update({ monto_cobrado: cobrado, estado_pago: estadoPago }).eq('id', pedidoId);
 
+  // Quien vendió cobra cuando paga el cliente: este cobro genera su parte
+  await generarPagosVenta(pedidoId);
+
   return { cobro, cobrado, estadoPago, resta: Math.max(0, total - cobrado) };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pago por venta                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Quién vende, si nadie dice otra cosa: la persona que está usando la app.
+ *
+ * Una trabajadora entra con su ficha. La administración entra sin ficha (el
+ * PIN de admin no es de ninguna trabajadora), pero su sesión de Supabase sí
+ * tiene una —la que usa el servidor para saber quién es—, y a esa se le
+ * acredita. Un dispositivo de administración sin sesión no sabe quién es: el
+ * pedido queda sin vendedor y se asigna después a mano.
+ */
+async function quienVende() {
+  if (auth.trabajadoraId) return auth.trabajadoraId;
+  try { return (await sesion.identidad())?.trabajadoraId || null; } catch { return null; }
+}
+
+/** Cuánto le toca a quien vende estas líneas, con el pago por unidad de hoy. */
+function pagoVentaDeLineas(lineas) {
+  return lineas.reduce((a, l) => a + (l.cantidad || 0) * (l.producto?.pago_venta || 0), 0);
+}
+
+/** Lo mismo desde las líneas guardadas de un pedido. */
+async function pagoVentaDePedido(pedidoId) {
+  const [items, productos] = await Promise.all([
+    db.from('pedido_item').select().eq('pedido_id', pedidoId),
+    db.from('producto').select(),
+  ]);
+  return pagoVentaDeLineas(items.map((i) => ({
+    cantidad: i.cantidad, producto: productos.find((p) => p.id === i.producto_id),
+  })));
+}
+
+/**
+ * Genera lo que cobra quien vendió, un pago por cada cobro del pedido.
+ *
+ * El 20% de la ganancia bruta se cobra cuando el cliente PAGA, no cuando se
+ * entrega: Nueve90 se lleva el pedido el viernes y paga el lunes, y recién el
+ * lunes hay plata para repartir. Cada cobro genera la parte proporcional de
+ * `pedido.pago_venta_total`, que quedó congelado al entregar (regla 4). El
+ * cobro que completa el pedido se lleva el resto exacto, para que los redondeos
+ * de las señas no dejen centavos colgados.
+ *
+ * Idempotente: un cobro que ya tiene su pago no genera otro. Se llama al
+ * entregar (por los cobros de antes, como una seña), al cobrar y al asignar
+ * vendedor. Si cambió el vendedor, lo pendiente pasa a la persona nueva; lo ya
+ * pagado no se mueve.
+ */
+export async function generarPagosVenta(pedidoId) {
+  const pedido = await db.from('pedido').select().eq('id', pedidoId).single();
+  if (!pedido || pedido.estado !== 'entregado' || !pedido.vendido_por) return [];
+
+  const totalVenta = pedido.pago_venta_total || 0;
+  const total = pedido.total || 0;
+  if (!(totalVenta > 0) || !(total > 0)) return [];
+
+  const [cobros, previos] = await Promise.all([
+    db.from('cobro').select().eq('pedido_id', pedidoId),
+    db.from('pago_venta').select().eq('pedido_id', pedidoId),
+  ]);
+
+  for (const p of previos) {
+    if (p.estado_pago !== 'pagada' && p.trabajadora_id !== pedido.vendido_por) {
+      await db.from('pago_venta').update({ trabajadora_id: pedido.vendido_por }).eq('id', p.id);
+    }
+  }
+
+  const conPago = new Set(previos.map((p) => p.cobro_id));
+  let generado = previos.reduce((a, p) => a + (p.monto || 0), 0);
+  let cobrado = 0;
+  const nuevos = [];
+
+  const clave = (c) => `${c.fecha || ''}|${c.created_at || ''}`;
+  const enOrden = [...cobros].sort((a, b) => clave(a).localeCompare(clave(b)));
+  for (const c of enOrden) {
+    cobrado += c.monto || 0;
+    if (conPago.has(c.id)) continue;
+
+    const completa = cobrado >= total - EPS;
+    const monto = completa
+      ? Math.max(0, totalVenta - generado)
+      : Math.round((totalVenta * (c.monto || 0) / total) * 100) / 100;
+    generado += monto;
+
+    nuevos.push(await db.from('pago_venta').insert({
+      trabajadora_id: pedido.vendido_por,
+      pedido_id: pedidoId,
+      cobro_id: c.id,
+      fecha: c.fecha,
+      monto,
+      estado_pago: 'pendiente',
+      fecha_pago: null,
+    }));
+  }
+
+  return nuevos;
+}
+
+/**
+ * La administración dice quién vendió un pedido ya entregado.
+ *
+ * Para los pedidos que se entregaron sin vendedor —un dispositivo sin sesión,
+ * o lo de antes de que existiera el pago por venta— y para corregir uno mal
+ * acreditado. Si el pedido no tenía el monto congelado, se congela ahora con
+ * el pago por unidad de hoy. Lo que se generó y todavía no se pagó pasa a la
+ * persona nueva; lo ya pagado no se mueve.
+ */
+export async function asignarVendedor(pedidoId, trabajadoraId) {
+  auth.exigir('liquidar');
+
+  const pedido = await db.from('pedido').select().eq('id', pedidoId).single();
+  if (!pedido) throw new Error('Pedido inexistente');
+  if (pedido.estado !== 'entregado') throw new Error('El vendedor se asigna a un pedido entregado');
+
+  const t = trabajadoraId ? await db.from('trabajadora').select().eq('id', trabajadoraId).single() : null;
+  if (trabajadoraId && !t) throw new Error('Esa persona no existe');
+
+  const patch = { vendido_por: trabajadoraId || null };
+  if (pedido.pago_venta_total == null) patch.pago_venta_total = await pagoVentaDePedido(pedidoId);
+  await db.from('pedido').update(patch).eq('id', pedidoId);
+
+  return generarPagosVenta(pedidoId);
 }
 
 /**
@@ -740,6 +878,13 @@ export async function anularPedido(pedidoId, motivo) {
     }
   }
 
+  // Sin venta no hay pago por venta. Lo pendiente se borra; lo que ya se le
+  // pagó a quien vendió no se le descuenta solo: eso se habla en persona
+  const pagosVenta = await db.from('pago_venta').select().eq('pedido_id', pedidoId);
+  for (const pv of pagosVenta.filter((x) => x.estado_pago !== 'pagada')) {
+    await db.from('pago_venta').delete().eq('id', pv.id);
+  }
+
   const cobros = await db.from('cobro').select().eq('pedido_id', pedidoId);
   let devuelto = 0;
 
@@ -768,10 +913,11 @@ export async function anularPedido(pedidoId, motivo) {
 /*  Consultas                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Pedido con todo lo que cuelga de él: items, cobros y cliente. */
+/** Pedido con todo lo que cuelga de él: items, cobros, cliente y pagos por venta. */
 export async function detallePedido(pedidoId) {
   const pedido = await db.from('pedido').select().eq('id', pedidoId).single();
   if (!pedido) return null;
+  const pagosVenta = auth.filtrarPropio(await db.from('pago_venta').select().eq('pedido_id', pedidoId));
 
   const [items, cobros] = await Promise.all([
     db.from('pedido_item').select().eq('pedido_id', pedidoId),
@@ -782,7 +928,7 @@ export async function detallePedido(pedidoId) {
     ? await db.from('cliente').select().eq('id', pedido.cliente_id).single()
     : null;
 
-  return { pedido, items, cobros, cliente };
+  return { pedido, items, cobros, cliente, pagosVenta };
 }
 
 /** Pedidos con fecha de entrega dentro del rango, ordenados por día. */
@@ -865,6 +1011,7 @@ async function revertirVenta(pedidoId, stockTocado) {
     }
   }
   await db.from('movimiento_stock_producto').delete().eq('referencia_id', pedidoId);
+  await db.from('pago_venta').delete().eq('pedido_id', pedidoId);
   await db.from('pedido_item').delete().eq('pedido_id', pedidoId);
   await db.from('cobro').delete().eq('pedido_id', pedidoId);
   await db.from('pedido').delete().eq('id', pedidoId);
@@ -899,9 +1046,12 @@ export async function registrarVenta({ lineas, medio, clienteId = null, clienteN
   const un = state.unidadNegocio.id;
   const fecha = hoyISO();
 
+  const vendidoPor = await quienVende();
   const pedido = await db.from('pedido').insert({
     unidad_negocio_id: un,
     cliente_id: clienteId,
+    vendido_por: vendidoPor,
+    pago_venta_total: pagoVentaDeLineas(lineas),   // congelado: es lo de hoy
     canal: 'mostrador_cic',
     modo_entrega: 'en_el_acto',   // se entrega y se cobra en el mismo momento
     direccion_entrega: null,
@@ -972,6 +1122,9 @@ export async function registrarVenta({ lineas, medio, clienteId = null, clienteN
       monto_cobrado: total,
       estado_pago: 'pagado',
     }).eq('id', pedido.id).single();
+
+    // Se entrega y se cobra en el acto: quien la cargó ya tiene su parte
+    await generarPagosVenta(pedido.id);
 
     return { pedido: confirmado ?? { ...pedido, estado: 'entregado', estado_pago: 'pagado' }, total };
   } catch (e) {
@@ -1571,6 +1724,8 @@ async function modalPedido(pedidoId, vista) {
       </div>
     </div>
 
+    ${bloqueVendedor(pedido, detalle.pagosVenta)}
+
     ${pedido.estado === 'cancelado' ? '' : `
       ${abierto ? `
         <div class="bloque">
@@ -1605,6 +1760,17 @@ async function modalPedido(pedidoId, vista) {
     });
 
     root.querySelector('#p-editar')?.addEventListener('click', () => modalNuevoPedido(detalle, vista));
+
+    root.querySelector('#p-vendedor')?.addEventListener('click', async (ev) => {
+      const chip = ev.target.closest('[data-vendedor]');
+      if (!chip || chip.classList.contains('sel')) return;
+      try {
+        await asignarVendedor(pedidoId, chip.dataset.vendedor || null);
+        ui.cerrarModal();
+        await refrescar();
+        ui.toast('Vendedor actualizado');
+      } catch (err) { ui.toast(err.message, true); }
+    });
 
     root.querySelector('#p-cobrar')?.addEventListener('click', () => modalCobro(pedido, resta));
 
@@ -1916,6 +2082,45 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
 }
 
 /* ------------------------------------------------------------------ */
+
+/**
+ * Quién vendió y entregó el pedido, y cuánto le toca por eso.
+ *
+ * Lo ve la administración, y la trabajadora si la venta es suya: lo que cobra
+ * otra no se muestra (regla 8). La administración puede asignar o cambiar el
+ * vendedor con un toque; lo pendiente pasa a la persona nueva.
+ */
+function bloqueVendedor(pedido, pagosVenta = []) {
+  if (pedido.estado !== 'entregado') return '';
+  const admin = auth.puede('liquidar');
+  const propia = pedido.vendido_por && pedido.vendido_por === auth.trabajadoraId;
+  if (!admin && !propia) return '';
+
+  const vendedor = pedido.vendido_por
+    ? (state.trabajadoras.find((t) => t.id === pedido.vendido_por)?.nombre || 'Otra persona')
+    : null;
+  const toca = pedido.pago_venta_total || 0;
+  const generado = pagosVenta.reduce((a, p) => a + (p.monto || 0), 0);
+
+  return `
+    <div class="bloque">
+      <div class="bloque__titulo">Vendió y entregó</div>
+      ${admin ? `
+        <div class="chips" id="p-vendedor">
+          ${state.trabajadoras.map((t) => `
+            <button class="chip ${t.id === pedido.vendido_por ? 'sel' : ''}" data-vendedor="${t.id}">${ui.esc(t.nombre)}</button>
+          `).join('')}
+        </div>` : `<p style="margin:0">${ui.esc(vendedor)}</p>`}
+      ${vendedor && toca > 0 ? `
+        <p class="faint" style="margin:var(--sp-2) 0 0">
+          Le tocan <span class="num">${ui.money(toca)}</span> por la venta ·
+          ${generado >= toca - EPS ? 'ya cobrado por el cliente'
+            : `<span class="num">${ui.money(generado)}</span> generados: el resto, cuando pague el cliente`}
+        </p>`
+      : !vendedor ? '<p class="faint" style="margin:var(--sp-2) 0 0">Sin vendedor: la venta no genera pago hasta que se asigne.</p>'
+      : '<p class="faint" style="margin:var(--sp-2) 0 0">Estos productos no tienen pago por venta definido.</p>'}
+    </div>`;
+}
 
 /** Hoja de cobro de un pedido. Sugiere el saldo, permite cobrar una seña. */
 function modalCobro(pedido, resta) {

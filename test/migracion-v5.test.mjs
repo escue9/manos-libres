@@ -79,5 +79,13 @@ t('la tabla nueva existe y se puede escribir', !!fila.id);
 t('y se filtra por sus índices',
   (await db.from('pago_produccion').select().eq('trabajadora_id', 't1').eq('estado_pago', 'pendiente')).length === 1);
 
+// v5 → v6 viene en la misma subida: una base v4 pasa directo a la última
+const venta = await db.from('pago_venta').insert({
+  trabajadora_id: 't1', pedido_id: 'x', cobro_id: 'c1', fecha: '2026-10-12', monto: 100, estado_pago: 'pendiente',
+});
+t('aparece también pago_venta, y se filtra por cobro',
+  !!venta.id && (await db.from('pago_venta').select().eq('cobro_id', 'c1')).length === 1);
+t('un producto viejo tampoco tiene pago por venta', p.pago_venta == null);
+
 console.log(`\n${ok} pasaron · ${mal} fallaron`);
 process.exit(mal ? 1 : 0);

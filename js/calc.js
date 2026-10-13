@@ -294,8 +294,15 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
   const gastosOperativos = gastos.reduce(
     (a, g) => a + (g.tipo === 'ingreso' ? -g.monto : g.monto), 0);
 
+  // El 20% de quien vendió y entregó: lo congelado en cada pedido entregado.
+  // Va por devengado, como todo el cierre: se reconoce al entregar aunque se
+  // le pague a quien vendió cuando cobre el pedido (regla 5)
+  const pagoVenta = pedidos
+    .filter((p) => idsEntregados.has(p.id))
+    .reduce((a, p) => a + (p.vendido_por ? (p.pago_venta_total || 0) : 0), 0);
+
   const margenBruto = ventas - costoMercaderia;
-  const gananciaNeta = margenBruto - costoLaboral - gastosOperativos;
+  const gananciaNeta = margenBruto - pagoVenta - costoLaboral - gastosOperativos;
 
   return {
     ventas,
@@ -304,6 +311,7 @@ export function cierreSemanal({ pedidos = [], items = [], jornadas = [], gastos 
     pagoProduccion,
     margenBruto,
     margenBrutoPct: ventas > 0 ? (margenBruto / ventas) * 100 : 0,
+    pagoVenta,
     costoLaboral,
     gastosOperativos,
     gananciaNeta,

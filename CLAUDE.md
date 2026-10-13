@@ -96,9 +96,14 @@ Todo cambio de stock deja un `movimiento_stock_*`. Los ajustes manuales exigen m
 
 Una trabajadora ve solo lo propio: lo que produjo, sus días y su total. Nunca lo que produjo, los días ni la liquidación de otra. Tampoco ve costos, márgenes ni ganancias. Sí ve cuánto se paga por unidad de cada producto: es lo que cobran y es igual para todas.
 
-### 9. Se cobra por producción
+### 9. Se cobra por producción y por venta
 
-Desde octubre de 2026 cada producto tiene `pago_produccion` y quien lo produce lo cobra (`pago_produccion`, la tabla). Las jornadas son asistencia, sin plata. La paga **es costo**: entra en `calc.costoEfectivo`, y por eso el costo laboral del cierre semanal ya no la suma. Ver `docs/FASE-3.md`.
+La **ganancia bruta** de cada producto (precio − insumos) se reparte: **60%** para quien lo produce, **20%** para quien genera la venta y la entrega, **20%** para la reinversión de Manos Libres.
+
+- **Producción** (desde octubre de 2026): cada producto tiene `pago_produccion` y quien lo produce lo cobra (`pago_produccion`, la tabla). Las jornadas son asistencia, sin plata. La paga **es costo**: entra en `calc.costoEfectivo`, y por eso el costo laboral del cierre semanal ya no la suma.
+- **Venta** (desde el 12/10/2026): cada producto tiene `pago_venta`. Al entregar un pedido queda `vendido_por` y se congela `pago_venta_total`; **se cobra cuando paga el cliente**: cada cobro genera su parte en `pago_venta`. No entra en el snapshot de costo: el cierre lo resta en su propia línea.
+
+Ver `docs/FASE-3.md`.
 
 ---
 

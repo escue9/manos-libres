@@ -628,6 +628,35 @@ export async function fijarPagoProduccion(productoId, monto) {
 }
 
 /**
+ * Cuánto se le paga a quien vende y entrega una unidad de este producto: el
+ * 20% de la ganancia bruta (precio menos insumos), redondeado a mano.
+ *
+ * No es costo del producto como el de producción: se genera recién cuando el
+ * cliente paga (pedidos.js §generarPagosVenta) y el cierre lo resta en su
+ * propia línea. Lo ya entregado no se toca: cada pedido congeló su monto al
+ * entregarse.
+ */
+export async function fijarPagoVenta(productoId, monto) {
+  auth.exigir('liquidar');
+
+  const valor = Number(monto);
+  if (monto === '' || monto == null || !(valor >= 0)) {
+    throw new Error('El pago por venta tiene que ser un número: cero o más');
+  }
+  const p = await db.from('producto').select().eq('id', productoId).single();
+  if (!p) throw new Error('Producto inexistente');
+
+  await db.from('producto').update({ pago_venta: valor }).eq('id', productoId);
+  return valor;
+}
+
+/** El 20% de la ganancia bruta de un producto, para sugerir el pago por venta. */
+export function pagoVentaSugerido(producto) {
+  const bruta = (producto.precio_venta || 0) - calc.costoBase(producto);
+  return bruta > 0 ? Math.round(bruta * 0.2) : 0;
+}
+
+/**
  * Bloque "Quiénes trabajan" de la orden.
  *
  * DECISIÓN DE PRIVACIDAD — la regla 8 protege la tarifa, los días acumulados y
@@ -2400,6 +2429,13 @@ function editorReceta(productoId, recetaOriginal) {
              placeholder="Sin definir" value="${p.pago_produccion ?? ''}" ${soloLectura ? 'disabled' : ''}>
       <span class="faint">Es costo: entra en el margen. Sin definir, la orden de este producto no cierra.</span>
     </div>
+    <div class="field" style="margin-bottom:var(--sp-4)">
+      <label for="r-venta">Se le paga a quien lo vende y entrega, por unidad</label>
+      <input class="input" id="r-venta" type="number" inputmode="decimal" step="any" min="0"
+             placeholder="${verCostos() && pagoVentaSugerido(p) ? `El 20% de la ganancia bruta: ${pagoVentaSugerido(p)}` : 'Sin definir'}"
+             value="${p.pago_venta ?? ''}" ${soloLectura ? 'disabled' : ''}>
+      <span class="faint">Se cobra cuando el cliente paga. Sin definir, la venta no genera pago.</span>
+    </div>
 
     <div id="r-lineas" class="stack"></div>
     ${soloLectura ? '' : '<button class="btn btn--block" id="r-agregar" style="margin-top:var(--sp-3)">+ Agregar insumo</button>'}
@@ -2521,6 +2557,10 @@ function editorReceta(productoId, recetaOriginal) {
         if (paga != null && paga !== p.pago_produccion) {
           const { alerta } = await fijarPagoProduccion(productoId, paga);
           if (alerta && !alertas.some((a) => a.producto === alerta.producto)) alertas.push(alerta);
+        }
+        const campoVenta = root.querySelector('#r-venta');
+        if (campoVenta && campoVenta.value !== '' && Number(campoVenta.value) !== p.pago_venta) {
+          await fijarPagoVenta(productoId, campoVenta.value);
         }
         ui.cerrarModal();
         await refrescar();

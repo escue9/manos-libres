@@ -651,6 +651,7 @@ async function pantallaCierre(cont, vista) {
       ${linea('− Insumos', c.costoInsumos)}
       ${linea('− Pago por producción', c.pagoProduccion)}
       ${linea('= Margen bruto', c.margenBruto, ui.pct(c.margenBrutoPct), true)}
+      ${linea('− Pago por venta', c.pagoVenta)}
       ${c.costoLaboral ? linea('− Jornadas pagadas por día', c.costoLaboral) : ''}
       ${linea('− Gastos operativos', c.gastosOperativos)}
       ${linea('= Ganancia neta', c.gananciaNeta, ui.pct(c.gananciaNetaPct), true)}
@@ -964,6 +965,7 @@ function imprimirRendicion(desde, hasta, datos) {
       ${fila('Ventas', datos.devengado.ventas)}
       ${fila('Insumos', -datos.devengado.costoInsumos)}
       ${fila('Pago por producción', -datos.devengado.pagoProduccion)}
+      ${fila('Pago por venta', -datos.devengado.pagoVenta)}
       ${datos.devengado.costoLaboral ? fila('Jornadas pagadas por día', -datos.devengado.costoLaboral) : ''}
       ${fila('Gastos operativos', -datos.devengado.gastosOperativos)}
       <tr class="total"><td>Ganancia neta</td><td class="n">${ui.money(datos.devengado.gananciaNeta)}</td></tr>

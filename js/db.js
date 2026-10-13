@@ -26,8 +26,11 @@ const DB_NAME = 'cocina_cic';
  *         poder contarle al servidor lo que se borró estando sin señal.
  *  4 → 5  aparece `pago_produccion`: se cobra por lo producido, no por día.
  *         Es una tabla nueva y nada más; lo que ya estaba no se toca.
+ *  5 → 6  aparece `pago_venta`: el 20% de la ganancia bruta para quien vende
+ *         y entrega. Tabla nueva; `pedido` y `producto` suman campos, que en
+ *         IndexedDB no necesitan migración.
  */
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 export const TABLES = [
   'config',
@@ -48,6 +51,7 @@ export const TABLES = [
   'tarifa_historica',
   'jornada',
   'pago_produccion',
+  'pago_venta',
   'movimiento_caja',
 ];
 
@@ -79,6 +83,7 @@ const INDEXES = {
   tarifa_historica: ['trabajadora_id'],
   jornada: ['trabajadora_id', 'fecha', 'orden_produccion_id', 'estado_pago'],
   pago_produccion: ['trabajadora_id', 'fecha', 'orden_produccion_id', 'estado_pago'],
+  pago_venta: ['trabajadora_id', 'fecha', 'pedido_id', 'cobro_id', 'estado_pago'],
   movimiento_caja: ['unidad_negocio_id', 'fecha', 'tipo', 'origen'],
 };
 

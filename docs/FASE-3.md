@@ -284,3 +284,73 @@ aparezca lo cobrado por otra, que los dos comprobantes —el de producción y el
 viejo— apunten a ella, que el texto de WhatsApp no traiga datos ajenos ni
 número, que el comprobante impreso lleve su nombre, diga "por producción" y el
 pie de la Federación, y que desde la consola no saque el de otra.
+
+---
+
+## Addendum — se cobra también por venta (12/10/2026)
+
+La ganancia bruta de cada producto (precio menos insumos) se reparte **60%** para
+quien lo produce, **20%** para quien genera la venta y la entrega y **20%** para la
+reinversión de Manos Libres. El 60% ya estaba: los montos de `pago_produccion` de
+la primera semana dan entre 59,8% y 60,6% de la bruta de cada producto. Faltaba el
+20% de la venta.
+
+### Qué registros genera cada operación
+
+```
+fijarPagoVenta(producto, monto)            producto.pago_venta (solo admin)
+
+entregarPedido(pedido, { vendidoPor })
+  ├─ pedido.vendido_por                    quien entrega, salvo que se diga otra
+  ├─ pedido.pago_venta_total               Σ cantidad × pago_venta, congelado
+  └─ generarPagosVenta()                   por los cobros de antes (una seña)
+
+registrarCobro(pedido, …)
+  └─ pago_venta                            la parte de ese cobro, para vendido_por
+
+registrarVenta(…)                          las dos cosas en el acto
+
+asignarVendedor(pedido, trabajadora)       admin: asigna o cambia; lo pendiente
+                                           pasa a la persona nueva
+
+liquidarSemana(desde, hasta)
+  ├─ pago_venta → pagada + fecha_pago      lo cobrado de días que pasaron
+  └─ movimiento_caja                       el mismo egreso único, origen 'jornal'
+```
+
+### Decisiones tomadas
+
+**Se cobra cuando paga el cliente.** Lo pidió así Juan Martín: Nueve90 se lleva el
+pedido el viernes y paga el lunes, y recién el lunes hay plata para repartir. Cada
+cobro genera la parte proporcional; el que completa el pedido se lleva el resto
+exacto, para que las señas no dejen centavos colgados.
+
+**Se congela al entregar, no al cobrar.** El monto por pedido se fija con el pago
+por unidad del día de la entrega (regla 4). Si el pago por unidad sube antes de
+que el cliente pague, lo que cobra quien vendió no cambia.
+
+**No es costo del producto.** A diferencia del de producción, no entra en
+`calc.costoEfectivo` ni en el snapshot de `pedido_item`: la venta puede no tener
+vendedor, y el margen de una receta no depende de quién la vende. El cierre lo resta
+en su propia línea, **Pago por venta**, por devengado (lo entregado con vendedor). En
+la caja sale cuando se liquida (regla 5).
+
+**Quién vendió.** Por defecto, quien entrega. La administración entra sin ficha, así
+que se usa la ficha de su sesión de Supabase. Sin sesión, el pedido queda sin
+vendedor y la administración lo asigna desde el detalle del pedido.
+
+**Quien cobra puede no ser quien vendió.** Rocío puede registrar el cobro de un
+pedido que vendió otra persona, y ese cobro genera un pago a nombre de la otra. Por
+eso la política de inserción no es "solo lo propio" sino "a quien figura como
+vendedor del pedido, pendiente y sin superar lo congelado". Una trabajadora no puede
+acreditarse una venta ajena ni cambiar lo congelado (trigger `pedido_venta`).
+
+**Anular.** Lo pendiente se borra. Lo ya pagado a quien vendió no se descuenta solo.
+
+**Regla 8.** `pago_venta` se protege como `pago_produccion`: cada una ve lo suyo. En el
+detalle de un pedido, el bloque "Vendió y entregó" lo ve la administración y la
+trabajadora solo si la venta es suya.
+
+Migración: `supabase/migrations/20261012_pago_venta.sql`. Base local v6. Tests:
+`test/pago-venta.test.mjs`.
+

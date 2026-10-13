@@ -14,7 +14,7 @@
  * pidiera de ahí en más lo atendía el cache nuevo. Media app de cada versión.
  */
 
-const CACHE_VERSION = 'cocina-cic-v19';
+const CACHE_VERSION = 'cocina-cic-v20';
 
 const SHELL = [
   './',

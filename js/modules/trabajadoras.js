@@ -183,9 +183,10 @@ export async function confirmarPago(pagoId, confirmada = true) {
 export async function liquidarSemana(desde, hasta, { medio = 'efectivo' } = {}) {
   auth.exigir('liquidar');
 
-  const [jornadas, pagos] = await Promise.all([
+  const [jornadas, pagos, ventas] = await Promise.all([
     db.from('jornada').select().gte('fecha', desde).lte('fecha', hasta),
     db.from('pago_produccion').select().gte('fecha', desde).lte('fecha', hasta),
+    db.from('pago_venta').select().gte('fecha', desde).lte('fecha', hasta),
   ]);
 
   // Nunca se paga un día que todavía no pasó, venga de donde venga.
@@ -193,13 +194,17 @@ export async function liquidarSemana(desde, hasta, { medio = 'efectivo' } = {}) 
   const pendiente = (x) => x.confirmada && x.estado_pago !== 'pagada' && x.fecha <= hoy;
   const pagosAPagar = pagos.filter(pendiente);
   const jornadasAPagar = jornadas.filter((j) => pendiente(j) && (j.tarifa_aplicada || 0) > 0);
+  // El pago por venta no se confirma: nace de un cobro, que ya es plata que entró
+  const ventasAPagar = ventas.filter((v) => v.estado_pago !== 'pagada' && v.fecha <= hoy);
 
-  if (!pagosAPagar.length && !jornadasAPagar.length) {
-    throw new Error('No hay producción confirmada para liquidar');
+  if (!pagosAPagar.length && !jornadasAPagar.length && !ventasAPagar.length) {
+    throw new Error('No hay producción confirmada ni ventas cobradas para liquidar');
   }
 
+  const porVentas = ventasAPagar.reduce((a, v) => a + (v.monto || 0), 0);
   const total = pagosAPagar.reduce((a, p) => a + (p.total || 0), 0)
-    + jornadasAPagar.reduce((a, j) => a + (j.tarifa_aplicada || 0), 0);
+    + jornadasAPagar.reduce((a, j) => a + (j.tarifa_aplicada || 0), 0)
+    + porVentas;
   const unidades = pagosAPagar.reduce((a, p) => a + (p.cantidad || 0), 0);
 
   for (const p of pagosAPagar) {
@@ -208,6 +213,14 @@ export async function liquidarSemana(desde, hasta, { medio = 'efectivo' } = {}) 
   for (const j of jornadasAPagar) {
     await db.from('jornada').update({ estado_pago: 'pagada', fecha_pago: hoy }).eq('id', j.id);
   }
+  for (const v of ventasAPagar) {
+    await db.from('pago_venta').update({ estado_pago: 'pagada', fecha_pago: hoy }).eq('id', v.id);
+  }
+
+  const detalle = [
+    unidades ? `${unidades} unidades producidas` : '',
+    porVentas ? `${ui.money(porVentas)} por ventas` : '',
+  ].filter(Boolean).join(' y ');
 
   // Automático por la regla 6: nunca se carga a mano
   await db.from('movimiento_caja').insert({
@@ -217,23 +230,25 @@ export async function liquidarSemana(desde, hasta, { medio = 'efectivo' } = {}) 
     origen: 'jornal',
     referencia_id: null,
     monto: total,
-    descripcion: `Liquidación ${ui.fecha(desde)} – ${ui.fecha(hasta)} · ${unidades} unidades producidas`,
+    descripcion: `Liquidación ${ui.fecha(desde)} – ${ui.fecha(hasta)}${detalle ? ` · ${detalle}` : ''}`,
     medio,
   });
 
   return {
     total,
     unidades,
+    porVentas,
     lineas: pagosAPagar.length,
     jornadas: jornadasAPagar.length,
-    porTrabajadora: agruparPorTrabajadora(pagosAPagar, jornadasAPagar),
+    ventas: ventasAPagar.length,
+    porTrabajadora: agruparPorTrabajadora(pagosAPagar, jornadasAPagar, ventasAPagar),
   };
 }
 
-function agruparPorTrabajadora(pagos, jornadas = []) {
+function agruparPorTrabajadora(pagos, jornadas = [], ventas = []) {
   const m = new Map();
   const de = (id) => {
-    if (!m.has(id)) m.set(id, { unidades: 0, total: 0 });
+    if (!m.has(id)) m.set(id, { unidades: 0, total: 0, ventas: 0 });
     return m.get(id);
   };
   for (const p of pagos) {
@@ -242,6 +257,11 @@ function agruparPorTrabajadora(pagos, jornadas = []) {
     e.total += p.total || 0;
   }
   for (const j of jornadas) de(j.trabajadora_id).total += j.tarifa_aplicada || 0;
+  for (const v of ventas) {
+    const e = de(v.trabajadora_id);
+    e.ventas += v.monto || 0;
+    e.total += v.monto || 0;
+  }
   return [...m.entries()].map(([trabajadora_id, v]) => ({ trabajadora_id, ...v }));
 }
 
@@ -333,16 +353,17 @@ export async function guardarTrabajadora({
  * ella misma y todavía no se confirmó va aparte en `sinConfirmar`.
  */
 export async function resumenSemana(desde, hasta) {
-  const [jornadas, pagos] = await Promise.all([
+  const [jornadas, pagos, ventas] = await Promise.all([
     db.from('jornada').select().gte('fecha', desde).lte('fecha', hasta),
     db.from('pago_produccion').select().gte('fecha', desde).lte('fecha', hasta),
-  ]).then(([j, p]) => [auth.filtrarPropio(j), auth.filtrarPropio(p)]);
+    db.from('pago_venta').select().gte('fecha', desde).lte('fecha', hasta),
+  ]).then(([j, p, v]) => [auth.filtrarPropio(j), auth.filtrarPropio(p), auth.filtrarPropio(v)]);
 
   // state.trabajadoras trae solo las activas. Si alguien produjo el lunes y la
   // dieron de baja el miércoles, se liquida igual —liquidarSemana no filtra
   // por activa— y tiene que aparecer acá, o el admin ve un total y la caja
   // registra otro.
-  const conMovimiento = [...new Set([...jornadas, ...pagos].map((x) => x.trabajadora_id))]
+  const conMovimiento = [...new Set([...jornadas, ...pagos, ...ventas].map((x) => x.trabajadora_id))]
     .filter((id) => !state.trabajadoras.some((t) => t.id === id));
 
   const inactivas = conMovimiento.length
@@ -359,6 +380,7 @@ export async function resumenSemana(desde, hasta) {
   const filas = visibles.map((t) => {
     const susJornadas = jornadas.filter((j) => j.trabajadora_id === t.id);
     const susPagos = pagos.filter((p) => p.trabajadora_id === t.id);
+    const susVentas = ventas.filter((v) => v.trabajadora_id === t.id);
     const pagosOk = susPagos.filter((p) => p.confirmada);
     // Jornadas con tarifa: solo las de antes del cambio
     const jornalesOk = susJornadas.filter((j) => j.confirmada && (j.tarifa_aplicada || 0) > 0);
@@ -380,9 +402,13 @@ export async function resumenSemana(desde, hasta) {
       unidades: suma(pagosOk, 'cantidad'),
       porProducto: [...porProducto.values()],
       sinConfirmar: susPagos.filter((p) => !p.confirmada).length,
-      total: suma(pagosOk, 'total') + suma(jornalesOk, 'tarifa_aplicada'),
+      // Lo que le toca por lo que vendió y el cliente ya pagó
+      porVentas: suma(susVentas, 'monto'),
+      ventasPendiente: suma(susVentas.filter((v) => v.estado_pago !== 'pagada'), 'monto'),
+      total: suma(pagosOk, 'total') + suma(jornalesOk, 'tarifa_aplicada') + suma(susVentas, 'monto'),
       pendiente: suma(pagosOk.filter((p) => p.estado_pago !== 'pagada'), 'total')
-        + suma(jornalesOk.filter((j) => j.estado_pago !== 'pagada'), 'tarifa_aplicada'),
+        + suma(jornalesOk.filter((j) => j.estado_pago !== 'pagada'), 'tarifa_aplicada')
+        + suma(susVentas.filter((v) => v.estado_pago !== 'pagada'), 'monto'),
     };
   });
 
@@ -428,14 +454,16 @@ export async function resumenSemana(desde, hasta) {
 export async function liquidacionesPagadas({ trabajadoraId = null } = {}) {
   // filtrarPropio va antes que nada: lo que no pasa de acá no existe para la
   // pantalla, ni para el comprobante, ni para el texto de WhatsApp
-  const [pagosCrudos, jornadasCrudas] = await Promise.all([
+  const [pagosCrudos, jornadasCrudas, ventasCrudas] = await Promise.all([
     db.from('pago_produccion').select().eq('estado_pago', 'pagada'),
     db.from('jornada').select().eq('estado_pago', 'pagada'),
+    db.from('pago_venta').select().eq('estado_pago', 'pagada'),
   ]);
   const deQuien = (xs) => (trabajadoraId ? xs.filter((x) => x.trabajadora_id === trabajadoraId) : xs);
   const pagos = deQuien(auth.filtrarPropio(pagosCrudos));
   const jornales = deQuien(auth.filtrarPropio(jornadasCrudas))
     .filter((j) => (j.tarifa_aplicada || 0) > 0);
+  const ventas = deQuien(auth.filtrarPropio(ventasCrudas));
 
   // El admin necesita también a las que ya no trabajan: cobraron igual. Una
   // trabajadora no pide la lista del equipo, solo su propia ficha.
@@ -448,12 +476,13 @@ export async function liquidacionesPagadas({ trabajadoraId = null } = {}) {
   const grupo = (x) => {
     const clave = `${x.trabajadora_id}|${x.fecha_pago || ''}`;
     if (!grupos.has(clave)) {
-      grupos.set(clave, { trabajadora_id: x.trabajadora_id, fecha_pago: x.fecha_pago, pagos: [], jornales: [] });
+      grupos.set(clave, { trabajadora_id: x.trabajadora_id, fecha_pago: x.fecha_pago, pagos: [], jornales: [], ventas: [] });
     }
     return grupos.get(clave);
   };
   for (const p of pagos) grupo(p).pagos.push(p);
   for (const j of jornales) grupo(j).jornales.push(j);
+  for (const v of ventas) grupo(v).ventas.push(v);
 
   return [...grupos.values()].map((g) => {
     // Una línea por producto y monto congelado: si el pago de la empanada
@@ -469,7 +498,7 @@ export async function liquidacionesPagadas({ trabajadoraId = null } = {}) {
       e.total += p.total || 0;
       porLinea.set(k, e);
     }
-    const fechas = [...g.pagos, ...g.jornales].map((x) => x.fecha).sort();
+    const fechas = [...g.pagos, ...g.jornales, ...g.ventas].map((x) => x.fecha).sort();
     const ficha = porId.get(g.trabajadora_id);
 
     return {
@@ -484,8 +513,12 @@ export async function liquidacionesPagadas({ trabajadoraId = null } = {}) {
       jornales: g.jornales
         .map((j) => ({ fecha: j.fecha, tarifa_aplicada: j.tarifa_aplicada }))
         .sort((a, b) => a.fecha.localeCompare(b.fecha)),
+      // Lo que cobró por vender: un monto por pedido cobrado
+      porVentas: g.ventas.reduce((a, v) => a + (v.monto || 0), 0),
+      pedidosVendidos: new Set(g.ventas.map((v) => v.pedido_id)).size,
       total: g.pagos.reduce((a, p) => a + (p.total || 0), 0)
-        + g.jornales.reduce((a, j) => a + (j.tarifa_aplicada || 0), 0),
+        + g.jornales.reduce((a, j) => a + (j.tarifa_aplicada || 0), 0)
+        + g.ventas.reduce((a, v) => a + (v.monto || 0), 0),
     };
   }).sort((a, b) => (b.fecha_pago || '').localeCompare(a.fecha_pago || '')
                  || a.nombre.localeCompare(b.nombre));
@@ -531,9 +564,15 @@ const plural = (n, uno, varios) => `${ui.cantidad(n)} ${n === 1 ? uno : varios}`
  * El título dice lo que se pagó. Una liquidación vieja, de antes de cobrar por
  * producción, era por días: llamarla "por producción" sería reescribirla.
  */
-const tituloComprobante = (liq) => (liq.lineas.length
-  ? 'Comprobante de pago por producción'
-  : 'Comprobante de pago de jornadas');
+const tituloComprobante = (liq) => {
+  const vendio = (liq.porVentas || 0) > 0;
+  if (liq.lineas.length) return vendio ? 'Comprobante de pago por producción y venta' : 'Comprobante de pago por producción';
+  if (vendio) return 'Comprobante de pago por venta';
+  return 'Comprobante de pago de jornadas';
+};
+
+/** "Por la venta de 3 pedidos cobrados", para el comprobante. */
+const lineaVentas = (liq) => `Por la venta y entrega de ${plural(liq.pedidosVendidos, 'pedido cobrado', 'pedidos cobrados')}`;
 
 /**
  * El comprobante en texto plano, para mandar por WhatsApp.
@@ -555,6 +594,7 @@ export function textoComprobante(liq) {
     ...(liq.jornales.length
       ? [`${plural(liq.jornales.length, 'jornada', 'jornadas')} de antes del cambio a pago por producción = ${ui.money(porDia)}`]
       : []),
+    ...(liq.porVentas ? [`${lineaVentas(liq)} = ${ui.money(liq.porVentas)}`] : []),
     '',
     `Total cobrado: ${ui.money(liq.total)}`,
     '',
@@ -598,6 +638,7 @@ export function htmlComprobante(liq) {
       ${liq.jornales.map((j) => `
         <tr><td>${nombreDia(j.fecha)} ${fechaCompleta(j.fecha)} · jornada (antes del cambio)</td><td class="n">${ui.money(j.tarifa_aplicada)}</td></tr>
       `).join('')}
+      ${liq.porVentas ? `<tr><td>${lineaVentas(liq)}</td><td class="n">${ui.money(liq.porVentas)}</td></tr>` : ''}
       <tr class="total"><td>Total cobrado</td><td class="n">${ui.money(liq.total)}</td></tr>
     </table>
 
@@ -766,6 +807,8 @@ function tarjeta(f, fechas) {
       </div>
 
       ${f.porProducto.length ? `<div class="faint" style="margin-top:var(--sp-2)">${detalleProducido(f)}</div>` : ''}
+      ${verPlata && f.porVentas ? `<div class="faint" style="margin-top:var(--sp-1)">Por ventas cobradas
+        <span class="num">${ui.money(f.porVentas)}</span></div>` : ''}
 
       <div class="dim" style="font-size:.78rem;margin-top:var(--sp-3)">Días que vino</div>
       <div class="days" style="margin-top:var(--sp-1)">
@@ -861,7 +904,7 @@ function bloquePropio(resumen) {
         ${aConfirmar.length
           ? `Cargaste producción por <span class="num">${ui.money(porConfirmar)}</span> que todavía
              no confirmó la administración. Se suma a tu total cuando la confirme.`
-          : 'Cobrás por lo que producís: se carga al cerrar la orden de producción.'}
+          : 'Cobrás por lo que producís, y por lo que vendés y entregás cuando el cliente paga.'}
       </p>
     </div>`;
 }
@@ -933,6 +976,7 @@ function resumenLiquidacion(l) {
   const partes = [];
   if (l.unidades) partes.push(plural(l.unidades, 'unidad', 'unidades'));
   if (l.jornales.length) partes.push(`${plural(l.jornales.length, 'jornada', 'jornadas')} (antes del cambio)`);
+  if (l.porVentas) partes.push(`${plural(l.pedidosVendidos, 'venta', 'ventas')}`);
   partes.push(`${ui.fecha(l.desde)}${l.desde !== l.hasta ? ` – ${ui.fecha(l.hasta)}` : ''}`);
   return partes.map((p) => `<span>${p}</span>`).join('<span class="dim">·</span>');
 }
@@ -1029,6 +1073,7 @@ function desglosePendiente(f) {
     .map((e) => `${ui.cantidad(e.unidades)} ${ui.esc(nombreProducto(e.producto_id))} × ${ui.money(e.unitario)}`);
   const jornales = f.jornadas.filter((j) => j.confirmada && j.estado_pago !== 'pagada' && j.tarifa_aplicada > 0);
   if (jornales.length) lineas.push(`${jornales.length} ${jornales.length === 1 ? 'día' : 'días'} de antes del cambio`);
+  if (f.ventasPendiente) lineas.push(`ventas cobradas ${ui.money(f.ventasPendiente)}`);
   return lineas.join('<br>');
 }
 
