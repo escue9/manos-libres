@@ -191,11 +191,19 @@ async function pintarSync(cont) {
       <div class="bloque__titulo">Sincronización</div>
       <p class="faint" style="margin:0">
         ${est.configurado
-          ? 'La sesión de este dispositivo se cerró o venció, así que nada está viajando a la nube. '
-            + 'Volvé a entrar desde Pedidos → Catálogo online.'
+          ? 'La sesión de este dispositivo se cerró o venció, así que nada está viajando a la nube.'
           : 'Este dispositivo no está conectado a la nube. Todo se guarda acá y no viaja a ningún lado: '
             + 'hasta que se conecte, la copia de seguridad es la única que existe.'}
-      </p>`;
+      </p>
+      ${auth.puede('gestionarCanalWeb')
+        ? '<button class="btn btn--primary btn--block" id="m-conectar" style="margin-top:var(--sp-3)">Conectar a la nube</button>'
+        : ''}`;
+    cont.querySelector('#m-conectar')?.addEventListener('click', async () => {
+      // Import dinámico: canal-web.js arrastra pedidos y el catálogo, y el menú
+      // tiene que abrir en el acto
+      const { modalConectar } = await import('./modules/canal-web.js');
+      modalConectar(() => refrescarPendientes());
+    });
     return;
   }
 

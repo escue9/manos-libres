@@ -14,6 +14,8 @@ import { state } from '../state.js';
 import { auth } from '../auth.js';
 import { ui } from '../ui.js';
 import * as nube from '../nube.js';
+import * as sesion from '../sesion.js';
+import * as sync from '../sync.js';
 import { svg as qrSvg } from '../qr.js';
 
 /** Se recuerda entre renders: publicar algo no te devuelve al principio. */
@@ -31,7 +33,7 @@ export async function pantalla(cont) {
 
   if (!est.conectado) {
     cont.innerHTML = pantallaDesconectado(est);
-    cont.querySelector('#conectar')?.addEventListener('click', () => modalConectar(cont));
+    cont.querySelector('#conectar')?.addEventListener('click', () => modalConectar(() => pantalla(cont)));
     return;
   }
 
@@ -302,28 +304,50 @@ function imprimirQR(enlace) {
 /*  Conexión                                                           */
 /* ------------------------------------------------------------------ */
 
-function modalConectar(cont) {
+/**
+ * Conecta este dispositivo a la nube con el usuario de quien lo usa.
+ *
+ * La URL y la key del proyecto vienen puestas (sesion.PROYECTO) y plegadas:
+ * en un celular nuevo solo se escribe mail y contraseña. Se dejan a mano por
+ * si algún día cambia el proyecto.
+ *
+ * Al conectar sincroniza en el acto: en un dispositivo nuevo es lo que trae
+ * todo lo cargado en los otros, y esperar a la próxima apertura de la app
+ * parecía que no había pasado nada.
+ */
+export async function modalConectar(onListo = () => {}) {
+  const est = await nube.estado();
+  const url = est.url || sesion.PROYECTO.url;
+  const key = url === sesion.PROYECTO.url ? sesion.PROYECTO.anonKey : '';
+
   ui.abrirModal(`
-    <h3>Conectar el catálogo online</h3>
-    <p class="faint">Los datos del proyecto de Supabase donde viven el catálogo y el buzón.</p>
+    <h3>Conectar a la nube</h3>
+    <p class="faint">Con tu usuario, este dispositivo sube lo que se carga acá y
+      baja lo que se cargó en los otros.</p>
     <div class="stack" style="margin-top:var(--sp-4)">
       <div class="field">
-        <label for="c-url">URL del proyecto</label>
-        <input class="input" id="c-url" placeholder="https://xxxx.supabase.co" inputmode="url">
-      </div>
-      <div class="field">
-        <label for="c-key">Publishable key</label>
-        <input class="input" id="c-key" placeholder="sb_publishable_…">
-      </div>
-      <div class="field">
         <label for="c-email">Usuario</label>
-        <input class="input" id="c-email" type="email" autocomplete="username">
+        <input class="input" id="c-email" type="email" autocomplete="username"
+               value="${ui.esc(est.email || '')}">
       </div>
       <div class="field">
         <label for="c-pass">Contraseña</label>
         <input class="input" id="c-pass" type="password" autocomplete="current-password">
         <span class="faint">No se guarda: se usa una vez para abrir la sesión.</span>
       </div>
+      <details${key ? '' : ' open'}>
+        <summary class="faint">Proyecto de Supabase</summary>
+        <div class="stack" style="margin-top:var(--sp-3)">
+          <div class="field">
+            <label for="c-url">URL del proyecto</label>
+            <input class="input" id="c-url" inputmode="url" value="${ui.esc(url)}">
+          </div>
+          <div class="field">
+            <label for="c-key">Publishable key</label>
+            <input class="input" id="c-key" value="${ui.esc(key)}" placeholder="sb_publishable_…">
+          </div>
+        </div>
+      </details>
       <p class="faint" id="c-error" style="color:var(--danger)"></p>
       <button class="btn btn--primary btn--block" id="c-ok">Conectar</button>
     </div>
@@ -343,17 +367,31 @@ function modalConectar(cont) {
           email: root.querySelector('#c-email').value.trim(),
           password: root.querySelector('#c-pass').value,
         });
-        ui.bloquearModal(false);
-        ui.cerrarModal();
-        publicados = null;
-        ui.toast('Catálogo online conectado');
-        pantalla(cont);
       } catch (err) {
         ui.bloquearModal(false);
         error.textContent = err.message;
         btn.disabled = false;
         btn.textContent = 'Conectar';
+        return;
       }
+
+      // Conectado. Si la primera vuelta falla (se cortó la señal), la sesión
+      // queda igual y sincroniza sola la próxima vez que abra la app.
+      btn.textContent = 'Trayendo los datos…';
+      let aviso = 'Conectado a la nube';
+      try {
+        const r = await sync.sincronizar();
+        if (r.bajadas) await state.invalidar();
+        aviso = r.bajadas ? `Conectado · ${r.bajadas} ${r.bajadas === 1 ? 'registro bajado' : 'registros bajados'}` : aviso;
+      } catch (e) {
+        console.warn('Primera sincronización:', e.message);
+        aviso = 'Conectado. Los datos bajan cuando vuelva la señal';
+      }
+      ui.bloquearModal(false);
+      ui.cerrarModal();
+      publicados = null;
+      ui.toast(aviso);
+      onListo();
     });
   });
 }

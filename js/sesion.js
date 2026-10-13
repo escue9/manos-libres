@@ -35,6 +35,20 @@ const CLAVES = {
   rol:     'nube_rol',
 };
 
+/**
+ * El proyecto de Supabase de Manos Libres, para precargar el formulario de
+ * conexión: en un dispositivo nuevo solo hay que poner mail y contraseña.
+ *
+ * Las dos son públicas por diseño —la misma URL y la misma key están en
+ * catalogo/config.js, que las sirve a cualquiera—; lo que protege los datos es
+ * el RLS. Están copiadas y no importadas porque el catálogo no comparte código
+ * con el SO.
+ */
+export const PROYECTO = {
+  url: 'https://xkvkzuivyqunduavejla.supabase.co',
+  anonKey: 'sb_publishable_sVfuvpEY5bI469kaLact7g_iwEjYX5S',
+};
+
 /** Se renueva un minuto antes de que venza, para no cortar una operación. */
 const MARGEN_MS = 60_000;
 
