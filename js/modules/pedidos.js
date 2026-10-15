@@ -2341,7 +2341,7 @@ function modalNuevoPedido(detalle = null, vista = null, borrador = null) {
         const { faltantes } = await crearPedido({ ...datos, clienteId });
         ui.cerrarModal();
         await refrescar();
-        if (faltantes.length && auth.puede('gestionarInsumos')) await avisoCompras();
+        if (faltantes.length && auth.puede('cargarCompras')) await avisoCompras();
         else {
           ui.toast(faltantes.length
             ? 'Pedido cargado · falta producir'

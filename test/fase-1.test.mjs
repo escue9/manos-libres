@@ -249,7 +249,8 @@ console.log('\n── permisos del módulo');
 
 t('el admin gestiona insumos', auth.puede('gestionarInsumos'));
 auth.rol = 'trabajadora';
-t('la trabajadora NO gestiona insumos ni compras', !auth.puede('gestionarInsumos'));
+t('la trabajadora NO gestiona insumos ni recetas', !auth.puede('gestionarInsumos'));
+t('la trabajadora SÍ carga compras', auth.puede('cargarCompras'));
 t('la trabajadora NO ve costos', !auth.puede('verCostos'));
 t('la trabajadora NO ve al equipo completo', !auth.puede('verEquipoCompleto'));
 t('la trabajadora sí entra a producción', auth.puedeVer('produccion'));
@@ -267,18 +268,35 @@ const prodPerm = state.productos[0];
 auth.rol = 'trabajadora';
 auth.trabajadoraId = 'T1';
 
-const costoAntes = (await leer('insumo', harinaPerm.id)).costo_unitario;
+/* La trabajadora compra: el ticket lo carga ella, el costo y la caja los pone
+   el servidor (20261015_compra_trabajadora.sql). */
+const antes = await leer('insumo', harinaPerm.id);
 const errCompra = await tira(() => prod.registrarCompra({
-  insumoId: harinaPerm.id, cantidad: 10, costoTotal: 999999,
+  insumoId: harinaPerm.id, cantidad: 10, costoTotal: 999999, proveedor: 'Almacén Rocío', medio: 'transferencia',
 }));
-t('registrarCompra rechaza a la trabajadora', errCompra !== null);
-t('el mensaje dice qué permiso falta', /gestionarInsumos/.test(errCompra?.message || ''));
-t('el costo del insumo no se movió',
-  (await leer('insumo', harinaPerm.id)).costo_unitario === costoAntes);
+t('registrarCompra deja comprar a la trabajadora', errCompra === null);
+const despues = await leer('insumo', harinaPerm.id);
+t('suma el stock', cerca(despues.stock_actual, (antes.stock_actual || 0) + 10));
+t('el costo del insumo no lo toca el celular', despues.costo_unitario === antes.costo_unitario);
+const suya = (await db.from('compra_insumo').select()).find((c) => c.costo_total === 999999);
+t('la compra queda a su nombre', suya?.comprado_por === 'T1');
+t('y con el medio de pago, para el egreso del servidor', suya?.medio === 'transferencia');
+t('deja el movimiento de stock',
+  (await db.from('movimiento_stock_insumo').select()).some((m) => m.referencia_id === suya?.id && m.tipo === 'compra'));
+t('no escribe en la caja: lo hace el servidor',
+  !(await db.from('movimiento_caja').select()).some((m) => m.monto === 999999));
 
-const movimientos = await db.from('movimiento_caja').select();
-const egresosDeEsaCompra = movimientos.filter((m) => m.monto === 999999);
-t('no quedó un egreso huérfano en caja', egresosDeEsaCompra.length === 0);
+auth.trabajadoraId = null;
+t('sin saber quién es, no carga la compra',
+  (await tira(() => prod.registrarCompra({ insumoId: harinaPerm.id, cantidad: 1, costoTotal: 1 }))) !== null);
+auth.rol = 'dirigente';
+const errComision = await tira(() => prod.registrarCompra({ insumoId: harinaPerm.id, cantidad: 1, costoTotal: 1 }));
+t('la comisión no compra', /cargarCompras/.test(errComision?.message || ''));
+auth.rol = 'trabajadora';
+auth.trabajadoraId = 'T1';
+
+t('dar de alta un insumo sigue siendo de administración',
+  /gestionarInsumos/.test((await tira(() => prod.crearInsumo({ nombre: 'Algo nuevo', unidad_medida: 'kg' })))?.message || ''));
 
 const errReceta = await tira(() => prod.guardarReceta(prodPerm.id, [], 24));
 t('guardarReceta rechaza a la trabajadora', errReceta !== null);

@@ -58,7 +58,7 @@ function agrupar(filas, campo) {
  *   f) devuelve las alertas de margen para avisarlas con nombre y apellido
  */
 export async function registrarCompra({ insumoId, cantidad, costoTotal, proveedor = '', fecha = hoyISO(), medio = 'efectivo' }) {
-  auth.exigir('gestionarInsumos');
+  auth.exigir('cargarCompras');
 
   cantidad = Number(cantidad);
   costoTotal = Number(costoTotal);
@@ -67,6 +67,8 @@ export async function registrarCompra({ insumoId, cantidad, costoTotal, proveedo
 
   const insumo = await db.from('insumo').select().eq('id', insumoId).single();
   if (!insumo) throw new Error('Insumo inexistente');
+
+  if (!auth.puede('verCostos')) return registrarCompraSinCostos({ insumo, cantidad, costoTotal, proveedor, fecha, medio });
 
   const stockPrevio = insumo.stock_actual || 0;
   const costoPrevio = insumo.costo_unitario || 0;
@@ -109,6 +111,46 @@ export async function registrarCompra({ insumoId, cantidad, costoTotal, proveedo
     .map((a) => (a.texto ? { ...a, texto: subio + a.texto } : a));
 
   return { compra, costoPrevio, costoNuevo, costoCompraUnit, alertas };
+}
+
+/**
+ * La compra de quien no ve costos: la trabajadora sale con la plata, compra y
+ * carga el ticket.
+ *
+ * Acá solo se hace la parte de cantidades —la compra, el stock y su
+ * movimiento—. Los pasos b, c y e de arriba los hace el servidor cuando la
+ * compra sube (20261015_compra_trabajadora.sql), por dos motivos:
+ *   - el promedio ponderado necesita el costo que tenía el insumo, y ese
+ *     número ella no lo ve (regla 8): en este celular está en null
+ *   - el egreso no se puede escribir desde acá: la caja es de administración,
+ *     y un movimiento rechazado trabaría el sync para siempre
+ *
+ * La compra queda a su nombre (`comprado_por`): administración sabe quién puso
+ * la plata, y ella ve solo las suyas.
+ */
+async function registrarCompraSinCostos({ insumo, cantidad, costoTotal, proveedor, fecha, medio }) {
+  if (!auth.trabajadoraId) throw new Error('No se sabe quién está cargando la compra');
+  if (!MEDIOS.some((m) => m.id === medio)) medio = 'efectivo';
+
+  const compra = await db.from('compra_insumo').insert({
+    insumo_id: insumo.id, fecha, cantidad, costo_total: costoTotal, proveedor,
+    medio, comprado_por: auth.trabajadoraId,
+  });
+
+  await db.from('insumo').update({
+    stock_actual: (insumo.stock_actual || 0) + cantidad,
+    proveedor_habitual: proveedor || insumo.proveedor_habitual || null,
+  }).eq('id', insumo.id);
+
+  await db.from('movimiento_stock_insumo').insert({
+    insumo_id: insumo.id,
+    fecha: ahoraISO(),
+    tipo: 'compra',
+    cantidad,
+    referencia_id: compra.id,
+  });
+
+  return { compra, costoCompraUnit: costoTotal / cantidad, alertas: [] };
 }
 
 /**
@@ -1596,12 +1638,13 @@ export async function cargarSemana(semana, { soloValidar = false } = {}) {
 /* ================================================================== */
 
 /**
- * Los cuatro segmentos. Compras y Recetas son plata: la trabajadora no los ve
- * (regla 8). Stock y Producción sí, porque cuenta lo que hay y cocina.
+ * Los cuatro segmentos. Recetas es plata: la trabajadora no la ve (regla 8).
+ * Stock y Producción sí, porque cuenta lo que hay y cocina. Compras también:
+ * sale a comprar con el ticket en la mano, y ve solo lo que compró ella.
  */
 const SUBVISTAS = [
   { id: 'stock',      etiqueta: 'Stock' },
-  { id: 'compras',    etiqueta: 'Compras',    permiso: 'gestionarInsumos' },
+  { id: 'compras',    etiqueta: 'Compras',    permiso: 'cargarCompras' },
   { id: 'recetas',    etiqueta: 'Recetas',    permiso: 'gestionarInsumos' },
   { id: 'produccion', etiqueta: 'Producción' },
 ];
@@ -1616,6 +1659,7 @@ export function mostrarCompras() {
 
 const verCostos = () => auth.puede('verCostos');
 const gestiona = () => auth.puede('gestionarInsumos');
+const compra = () => auth.puede('cargarCompras');
 
 export async function render(vista) {
   const visibles = SUBVISTAS.filter((s) => !s.permiso || auth.puede(s.permiso));
@@ -1844,7 +1888,7 @@ function modalAccionesInsumo(id) {
       ${verCostos() && i.costo_unitario ? ` · <span class="num">${ui.money(i.costo_unitario)}</span> por ${ui.esc(i.unidad_medida)}` : ''}
     </p>
     <div class="stack" style="margin-top:var(--sp-4)">
-      ${gestiona() ? `<button class="btn btn--primary btn--block" data-accent="produccion" id="a-compra">Registrar compra</button>` : ''}
+      ${compra() ? `<button class="btn btn--primary btn--block" data-accent="produccion" id="a-compra">Registrar compra</button>` : ''}
       <button class="btn btn--block" id="a-ajuste">Ajustar stock</button>
       ${gestiona() ? `<button class="btn btn--block" id="a-editar">Editar insumo</button>` : ''}
     </div>
@@ -1930,7 +1974,10 @@ function modalInsumo(insumo = null) {
 async function pantallaCompras(cont) {
   const desde = hoyISO(ui.inicioSemana());
   const hasta = hoyISO(ui.finSemana());
-  const compras = (await db.from('compra_insumo').select().gte('fecha', desde).lte('fecha', hasta))
+  // Quien no ve el equipo completo ve solo lo que compró: el servidor tampoco
+  // le baja otra cosa, pero lo que quedó en el celular de antes no tiene por qué verse
+  const compras = auth.filtrarPropio(
+    await db.from('compra_insumo').select().gte('fecha', desde).lte('fecha', hasta), 'comprado_por')
     .sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.created_at).localeCompare(String(a.created_at)));
   const total = compras.reduce((a, c) => a + (c.costo_total || 0), 0);
   cont.innerHTML = `
@@ -1973,7 +2020,7 @@ async function pantallaCompras(cont) {
  * Si no falta producir nada, no ocupa lugar.
  */
 export async function montarListaCompras(caja, { plegada = false } = {}) {
-  if (!caja || !gestiona()) return;
+  if (!caja || !compra()) return;
   const lista = await listaDeCompras();
   caja.innerHTML = bloqueListaCompras(lista, plegada);
 
@@ -2090,7 +2137,9 @@ function hojaCompra({ insumoId = null, cantidad = null } = {}) {
             <svg viewBox="0 0 24 24">${m.svg}</svg>${m.etiqueta}
           </button>`).join('')}
       </div>
-      <p class="faint" style="margin:0">Se descuenta solo de la caja como egreso.</p>
+      <p class="faint" style="margin:0">${verCostos()
+        ? 'Se descuenta solo de la caja como egreso.'
+        : 'Queda a tu nombre: la administración ve quién puso la plata.'}</p>
       <button class="btn btn--primary btn--block" data-accent="produccion" id="hc-guardar">Registrar compra</button>
     </div>
   `, (root) => {
@@ -2139,7 +2188,8 @@ function hojaCompra({ insumoId = null, cantidad = null } = {}) {
             .slice(0, 12);
           const exacto = hits.some((i) => i.nombre.toLocaleLowerCase('es') === k);
           $('#hc-res').innerHTML = hits.map((i) => `<button class="chip" data-id="${i.id}">${ui.esc(i.nombre)}</button>`).join('')
-            + (q && !exacto ? `<button class="chip" data-crear>+ Crear «${ui.esc(q)}»</button>` : '');
+            + (q && !exacto && gestiona() ? `<button class="chip" data-crear>+ Crear «${ui.esc(q)}»</button>` : '')
+            + (q && !hits.length && !gestiona() ? '<span class="faint">No está en la lista. Avisale a la administración para que lo dé de alta.</span>' : '');
         };
         buscar.addEventListener('input', pintarResultados);
         $('#hc-res').addEventListener('click', (e) => {
@@ -2166,7 +2216,7 @@ function hojaCompra({ insumoId = null, cantidad = null } = {}) {
       const costoNuevo = calc.costoPonderado(sel?.stock_actual || 0, previo, enBase, unit);
       salida.innerHTML = `
         <div>Pagás <b class="num">${ui.money(unit)}</b> por ${ui.esc(b)}</div>
-        ${sel ? `<div class="faint">El costo del insumo queda en
+        ${sel && verCostos() ? `<div class="faint">El costo del insumo queda en
           <b class="num">${ui.money(costoNuevo)}</b>${previo ? ` (venía de ${ui.money(previo)})` : ''}</div>` : ''}`;
     }
 
@@ -2204,6 +2254,7 @@ function hojaCompra({ insumoId = null, cantidad = null } = {}) {
         ui.cerrarModal();
         await refrescar();
         if (alertas.length) modalAlertasMargen(alertas);
+        else if (costoNuevo == null) ui.toast('Compra registrada');
         else ui.toast(`Compra registrada · ${ui.money(costoNuevo)} por ${ui.unidadCorta(sel.unidad_medida)}`);
       } catch (err) {
         console.error(err);
@@ -2642,10 +2693,10 @@ async function pantallaOrdenes(cont) {
 async function modalNuevaOrden() {
   const productos = state.productos.filter((p) => p.activo);
 
-  // Los pedidos abiertos ya dicen qué hay que cocinar: se precarga lo que falta
-  // para cumplirlos (PDR §4.2, paso 4). Es un número editable, no una orden.
+  // Todo arranca en cero: la cantidad la decide quien cocina. Lo que piden los
+  // pedidos abiertos se muestra al lado como referencia, pero no se precarga —
+  // una orden con empanadas que nadie eligió se crea sin querer.
   const demanda = new Map((await demandaPendiente()).map((d) => [d.producto_id, d]));
-  const hayDemanda = [...demanda.values()].some((d) => d.falta > 0);
 
   ui.abrirModal(`
     <h3>Nueva orden</h3>
@@ -2656,7 +2707,6 @@ async function modalNuevaOrden() {
       </div>
       <div>
         <label class="dim" style="font-size:.78rem">Qué se va a producir</label>
-        ${hayDemanda ? '<p class="faint" style="margin:var(--sp-1) 0 0">Viene precargado lo que falta para los pedidos abiertos.</p>' : ''}
         <div class="stack" style="margin-top:var(--sp-2)">
           ${productos.map((p) => {
             const d = demanda.get(p.id);
@@ -2667,7 +2717,7 @@ async function modalNuevaOrden() {
                 ${d?.falta > 0 ? `<div class="faint">${d.pedido} pedidas · hay ${d.stock}</div>` : ''}
               </div>
               <input class="input cant-chica" type="number" inputmode="numeric" min="0" placeholder="0"
-                     value="${d?.falta > 0 ? d.falta : ''}"
+                     value=""
                      aria-label="Cantidad de ${ui.esc(p.nombre)}">
             </div>`;
           }).join('')}

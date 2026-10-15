@@ -25,6 +25,7 @@ const PERMISOS = {
     verEquipoCompleto: true,
     editarPrecios: true,
     gestionarInsumos: true,
+    cargarCompras: true,
     cargarProduccion: true,
     gestionarClientes: true,
     cargarPedidos: true,
@@ -41,7 +42,8 @@ const PERMISOS = {
     verMargenes: false,
     verEquipoCompleto: false,   // solo se ve a sí misma
     editarPrecios: false,
-    gestionarInsumos: false,    // no compra ni edita insumos ni recetas
+    gestionarInsumos: false,    // no da de alta ni edita insumos ni recetas
+    cargarCompras: true,        // sí compra y carga el ticket: el costo y la caja los pone el servidor
     cargarProduccion: true,     // sí carga órdenes, las cierra y cuenta stock
     gestionarClientes: true,    // toma el pedido y carga al cliente en el momento
     cargarPedidos: true,        // vende, entrega y cobra: es su trabajo
@@ -59,6 +61,7 @@ const PERMISOS = {
     verEquipoCompleto: false,
     editarPrecios: false,
     gestionarInsumos: false,
+    cargarCompras: false,
     cargarProduccion: false,    // la comisión mira, no opera
     gestionarClientes: false,
     cargarPedidos: false,
