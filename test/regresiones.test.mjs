@@ -534,6 +534,13 @@ const { mostrarLogin } = await import('../js/login.js');
 mostrarLogin();
 await esperar(150);
 
+// Desde la vuelta del celular de Rocío, el primer arranque pregunta quién usa
+// el aparato antes de crear ningún PIN.
+t('el primer arranque pregunta quién usa el celular', /Quién usa este celular/.test(loginRoot.textContent));
+clic(loginRoot.querySelector('#l-cero'));
+clic(loginRoot.querySelector('#l-si'));
+await esperar(30);
+
 const tipear = async (pin) => {
   for (const d of pin) { clic(loginRoot.querySelector(`[data-d="${d}"]`)); await esperar(20); }
   await esperar(250);

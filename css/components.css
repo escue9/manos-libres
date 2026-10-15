@@ -317,6 +317,13 @@ body.con-login { overflow: hidden; }
 
 .login__msg { min-height: 1.4em; margin: var(--sp-3) 0 var(--sp-4); font-size: .82rem; color: transparent; }
 .login__msg.err { color: var(--danger); }
+.login__msg.aviso { color: var(--text-dim); }
+
+/* Primer arranque: ¿quién usa este celular? */
+.login__opcion { flex-direction: column; gap: 2px; min-height: 72px; padding: var(--sp-3) var(--sp-4); }
+.login__opcion span { font-size: .78rem; font-weight: 700; opacity: .85; }
+.login__form { text-align: left; }
+.login__form .login__msg { margin: 0; text-align: center; }
 
 /* Teclado numérico propio: el del sistema tapa media pantalla y tarda */
 .numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); }

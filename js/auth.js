@@ -1,8 +1,9 @@
 /**
  * auth.js — roles, PIN y permisos.
  *
- * Login por PIN, sin email ni contraseñas: las trabajadoras entran desde el
- * celular, rápido y sin fricción.
+ * Login por PIN: las trabajadoras entran desde el celular, rápido y sin
+ * fricción. El mail y la contraseña se tipean una sola vez, al dar de alta el
+ * aparato (vincularDispositivo); después abre el PIN.
  *
  * PRINCIPIO (PDR §2): una trabajadora ve solo lo propio. Nunca la tarifa, los
  * días ni la liquidación de otra. Nunca costos, márgenes ni ganancias.
@@ -84,6 +85,22 @@ export const ROLES = Object.keys(PERMISOS);
 
 const SESION_KEY = 'cocina_cic_sesion';
 const LARGO_PIN = 4;
+
+/**
+ * El PIN de un dispositivo del equipo, en config y nunca en la fila.
+ *
+ * El de una trabajadora vivía en `trabajadora.pin_acceso`, que en un celular
+ * propio no sirve por dos lados: el servidor no la deja escribir su fila (el
+ * equipo lo gestiona administración) y el hash de la PC está hecho con el salt
+ * de la PC, así que en otro aparato no matchea nunca. Es del aparato, no de la
+ * persona: va en config, que no viaja (sync.js → ORDEN).
+ */
+const PIN_DISPOSITIVO = {
+  hash: 'dispositivo_pin',
+  rol: 'dispositivo_rol',
+  trabajadoraId: 'dispositivo_trabajadora_id',
+  nombre: 'dispositivo_nombre',
+};
 
 /* ------------------------------------------------------------------ */
 /*  Hash                                                               */
@@ -184,6 +201,62 @@ export const auth = {
     await db.setConfig('admin_nombre', nombre);
   },
 
+  /**
+   * ¿Este aparato ya tiene dueña? Con PIN de administración o con el de alguien
+   * del equipo que se dio de alta acá. Si no, es el primer arranque y se
+   * pregunta quién lo usa.
+   */
+  async dispositivoListo() {
+    return (await this.hayAdmin()) || !!(await db.getConfig(PIN_DISPOSITIVO.hash));
+  },
+
+  /**
+   * Abre la sesión de Supabase de una persona del equipo en este aparato y
+   * devuelve quién es según el servidor.
+   *
+   * El proyecto va precargado (sesion.PROYECTO): a Rocío se le dan un mail y una
+   * contraseña, no una URL y una key. Si la cuenta no está apareada con nadie
+   * del equipo, o está dada de baja, la sesión se cierra acá mismo: un celular
+   * con sesión y sin persona no tiene a nombre de quién cargar nada.
+   */
+  async vincularDispositivo({ email, password }) {
+    await sesion.configurar(sesion.PROYECTO);
+    await sesion.entrar({ email: String(email || '').trim().toLowerCase(), password });
+
+    let yo;
+    try {
+      yo = await sesion.recordarQuienEs();
+    } catch (e) {
+      await sesion.salir();
+      throw e;
+    }
+
+    if (!yo?.trabajadora_id || !this.rolValido(yo.rol)) {
+      await sesion.salir();
+      throw new Error(yo?.rol === 'inactiva'
+        ? 'Esta cuenta está dada de baja. Hablá con administración.'
+        : 'Esa cuenta no está asociada a nadie del equipo. Hablá con administración.');
+    }
+    return { rol: yo.rol, trabajadoraId: yo.trabajadora_id, nombre: yo.nombre || '' };
+  },
+
+  /**
+   * El PIN de quien se dio de alta en este aparato.
+   *
+   * Administración usa el de siempre (admin_pin), así un celular nuevo de
+   * administración queda igual que la PC. El resto, el del dispositivo.
+   */
+  async crearPinDispositivo(pin, { rol, trabajadoraId, nombre }) {
+    if (!/^\d{4}$/.test(pin)) throw new Error('El PIN tiene que ser de 4 dígitos');
+    if (!this.rolValido(rol)) throw new Error(`Rol desconocido: ${rol}`);
+    if (rol === 'admin') return this.crearPinAdmin(pin, nombre || 'Administración');
+
+    await db.setConfig(PIN_DISPOSITIVO.hash, await hashPin(pin));
+    await db.setConfig(PIN_DISPOSITIVO.rol, rol);
+    await db.setConfig(PIN_DISPOSITIVO.trabajadoraId, trabajadoraId);
+    await db.setConfig(PIN_DISPOSITIVO.nombre, nombre || '');
+  },
+
   async cambiarPinTrabajadora(trabajadoraId, pin) {
     if (!/^\d{4}$/.test(pin)) throw new Error('El PIN tiene que ser de 4 dígitos');
     const h = await hashPin(pin);
@@ -240,6 +313,21 @@ export const auth = {
         nombre: await db.getConfig('admin_nombre', 'Administración'),
       });
       return { rol: 'admin' };
+    }
+
+    if (h === await db.getConfig(PIN_DISPOSITIVO.hash)) {
+      const rol = await db.getConfig(PIN_DISPOSITIVO.rol);
+      const trabajadoraId = await db.getConfig(PIN_DISPOSITIVO.trabajadoraId);
+      await this._verificarDispositivo(rol, trabajadoraId);
+      // El nombre, el de la fila si ya bajó: si administración lo corrige, que
+      // se vea. Si todavía no bajó nada, el que dijo el servidor al vincular.
+      const fila = await db.from('trabajadora').select().eq('id', trabajadoraId).single();
+      this._setSesion({
+        rol,
+        trabajadoraId,
+        nombre: fila?.nombre || await db.getConfig(PIN_DISPOSITIVO.nombre, '') || PERMISOS[rol]?.etiqueta,
+      });
+      return { rol, trabajadora: fila || null };
     }
 
     const trabajadoras = await db.from('trabajadora').select().eq('activa', true);
